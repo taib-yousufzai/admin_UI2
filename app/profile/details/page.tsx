@@ -1,10 +1,9 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getSession } from '@/lib/auth';
-import Sidebar from '@/components/Sidebar';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import { useAuth } from '@/hooks/useAuth';
-import type { Session } from '@supabase/supabase-js';
+import { api, ApiError } from '@/lib/api';
 import '../page.css';
 import './page.css';
 
@@ -56,7 +55,6 @@ function FormRow({ icon, label, fieldKey, type='text', placeholder, editing, val
 
 export default function ProfileDetailsPage() {
     useAuth();
-    const [session, setSession] = useState<Session | null>(null);
     const [profile, setProfile] = useState<ProfileData | null>(null);
     const [loading, setLoading] = useState(true);
     const [editing, setEditing] = useState(false);
@@ -72,22 +70,21 @@ export default function ProfileDetailsPage() {
 
     useEffect(() => {
         let cancelled = false;
-        getSession().then(async (s) => {
-            if (cancelled || !s) return;
-            setSession(s);
-            const res = await fetch('/api/user/profile', { headers: { Authorization: `Bearer ${s.access_token}` } });
-            if (!cancelled && res.ok) {
-                const data: ProfileData = await res.json();
-                setProfile(data);
-                setForm({
-                    full_name: data.full_name ?? '', phone: data.phone ?? '',
-                    date_of_birth: data.date_of_birth ?? '', city: data.city ?? '',
-                    state: data.state ?? '', pan_number: data.pan_number ?? '',
-                    bank_name: data.bank_name ?? '', account_no: data.account_no ?? '', ifsc: data.ifsc ?? '',
-                });
-            }
+        (async () => {
+            try {
+                const data = await api.get<ProfileData>('/api/user/profile');
+                if (!cancelled) {
+                    setProfile(data);
+                    setForm({
+                        full_name: data.full_name ?? '', phone: data.phone ?? '',
+                        date_of_birth: data.date_of_birth ?? '', city: data.city ?? '',
+                        state: data.state ?? '', pan_number: data.pan_number ?? '',
+                        bank_name: data.bank_name ?? '', account_no: data.account_no ?? '', ifsc: data.ifsc ?? '',
+                    });
+                }
+            } catch {}
             if (!cancelled) setLoading(false);
-        });
+        })();
         return () => { cancelled = true; };
     }, []);
 
@@ -97,14 +94,9 @@ export default function ProfileDetailsPage() {
     const handleSave = async () => {
         setSaving(true); setSaveMsg(null);
         try {
-            const s = await getSession();
-            if (!s) throw new Error();
-            const res = await fetch('/api/user/profile', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.access_token}` },
-                body: JSON.stringify(Object.fromEntries(Object.entries(form).map(([k,v]) => [k, v.trim()]))),
-            });
-            if (!res.ok) throw new Error();
+            await api.patch('/api/user/profile',
+                Object.fromEntries(Object.entries(form).map(([k,v]) => [k, v.trim()]))
+            );
             setProfile(prev => prev ? { ...prev, ...form } : prev);
             setSaveMsg({ type: 'success', text: 'Profile updated successfully!' });
             setEditing(false);
@@ -123,12 +115,12 @@ export default function ProfileDetailsPage() {
         setSaveMsg(null); setEditing(false);
     };
 
-    const email = profile?.email || session?.user?.email || '';
-    const userId = session?.user?.id ?? '';
+    const email = profile?.email || '';
+    const userId = profile?.client_id || '';
     // Hero always shows saved profile data, not live form state
     const savedName = profile?.full_name || (email ? email.split('@')[0].replace(/[._-]/g,' ').replace(/\b\w/g,c=>c.toUpperCase()) : '');
     const avatarLetter = (savedName || 'U').charAt(0).toUpperCase();
-    const clientId = profile?.client_id || (userId ? userId.replace(/-/g,'').slice(0,8).toUpperCase() : '—');
+    const clientId = profile?.client_id || '—';
 
     const fmtDate = (iso: string) => {
         if (!iso) return '—';
@@ -139,8 +131,7 @@ export default function ProfileDetailsPage() {
 
     return (
         <div className="desktop-layout">
-            <Sidebar />
-            <main className="main-viewport">
+                        <main className="main-viewport">
                 <div className="pd-root">
             <div className="pd-header">
                 <div className="pd-header-inner">
@@ -231,7 +222,7 @@ export default function ProfileDetailsPage() {
 
                         {editing && (
                             <button className="pd-save-btn" onClick={handleSave} disabled={saving}>
-                                {saving ? <><i className="fas fa-spinner fa-spin"></i> Saving…</> : <><i className="fas fa-check"></i> Save Changes</>}
+                                {saving ? <span style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}><AnimatedLoader size="small" /> Saving…</span> : <><i className="fas fa-check"></i> Save Changes</>}
                             </button>
                         )}
                     </>

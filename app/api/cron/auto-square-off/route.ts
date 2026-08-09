@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSharedKiteSession } from '@/lib/kiteSession';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -20,16 +20,20 @@ async function fetchLtp(symbol: string, settlement: string): Promise<number | nu
   if (isCrypto) {
     try {
       const sym = cleanSym.endsWith('USDT') ? cleanSym : `${cleanSym}USDT`;
-      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : 'http://localhost:8080');
+      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : null);
       const params = new URLSearchParams({ symbols: sym });
-      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store' });
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(50) });
       if (resTicker.ok) {
         const json = await resTicker.json();
         if (json.success && json.data && json.data[sym]) {
           return Number(json.data[sym].last_price);
         }
       }
-      const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store' });
+      const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store', signal: AbortSignal.timeout(50) });
       if (res.ok) {
         const data = await res.json();
         return data.price ? parseFloat(data.price) : null;
@@ -191,23 +195,25 @@ export async function GET(request: Request) {
         // Intraday brokerage is handled inside close_position based on entry/exit logic, 
         // carryBrokerage should theoretically be 0 for INTRADAY product_type anyway, 
         // but we compute it if needed by existing logic
-        const carryBrokerage = calculateCarryBrokerage({
-          productType: pos.product_type,
-          qty: Number(pos.qty_open),
-          entryPrice: Number(pos.entry_price),
-          carryCommissionType: segSetting?.carry_commission_type,
-          carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
-          commissionType: segSetting?.commission_type,
-          commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
-        });
+        let carryBrokerage = 0;
+        if (!pos.carry_brokerage_paid) {
+          carryBrokerage = calculateCarryBrokerage({
+            productType: pos.product_type,
+            qty: Number(pos.qty_open),
+            entryPrice: Number(pos.entry_price),
+            carryCommissionType: segSetting?.carry_commission_type,
+            carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
+            commissionType: segSetting?.commission_type,
+            commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
+          });
+        }
         
-        const { error: rpcErr } = await admin.rpc('close_position', {
-          p_position_id: pos.id,
-          p_user_id: userProfile.id,
-          p_ltp: baseLtp,
-          p_exit_price: exitPrice,
-          p_closed_by: 'SYSTEM_ACTION', // Use the standardized system action close reason
-          p_brokerage: carryBrokerage,
+        const { error: rpcErr } = await admin.rpc('close_position_v2', {
+          p_position_id:        pos.id,
+          p_close_qty:          Number(pos.qty_open),
+          p_close_price:        exitPrice,
+          p_closed_by:          'SYSTEM',
+          p_expected_brokerage: carryBrokerage,
         });
 
         if (!rpcErr) {
@@ -241,3 +247,4 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+

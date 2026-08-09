@@ -6,12 +6,16 @@ import { useOrderEntry, OrderSide, OrderType, ProductType } from '@/hooks/useOrd
 import { useActivePositions } from '@/hooks/useActivePositions';
 import { useMarketQuotes } from '@/hooks/useMarketQuotes';
 import OptionChainTable from './OptionChainTable';
-import Footer from '@/components/Footer';
 import TradingSegmentsDrawer from '@/components/TradingSegmentsDrawer';
-import { calculateMarginPortion } from '@/lib/marginCalculator';
+import { WatchlistItem, getTabForItem } from '@/app/watchlist/page';
+import AnimatedLoader from '@/components/AnimatedLoader';
+import { calculateMarginPortion } from '@/lib/trading/MarginCalculator';
+import { api, ApiError } from '@/lib/api';
+import { useTradeConfig } from '@/contexts/TradeConfigContext';
 import './option-chain.css';
 import dynamic from 'next/dynamic';
-import TradeSheet from '@/components/TradeSheet';
+const TradeSheet = dynamic(() => import('@/components/TradeSheet'), { ssr: false });
+import { ErrorModal } from '@/components/ErrorModal';
 
 const TradingChart = dynamic(() => import('@/components/TradingChart'), { ssr: false });
 
@@ -112,49 +116,26 @@ function OptionChainContent() {
   const [sheetSide, setSheetSide] = useState<'BUY' | 'SELL'>('BUY');
 
   const [userId, setUserId] = useState<string>('');
-  const [segmentSettings, setSegmentSettings] = useState<any[]>([]);
-  const [scriptSettings, setScriptSettings] = useState<{ symbol: string; lot_size: number }[]>([]);
+  // segmentSettings and scriptSettings come from the shared TradeConfigProvider
+  const { segmentSettings, scriptSettings } = useTradeConfig();
 
   useEffect(() => {
-    async function fetchUserIdAndSettings() {
+    async function fetchUserId() {
       try {
         const { getSharedSession } = await import('@/lib/sharedSession');
         const { token, userId: uid } = await getSharedSession();
         if (!token || !uid) return;
-        
         setUserId(uid);
-        
-        const { supabase: sb } = await import('@/lib/supabaseClient');
-        const { data: profile } = await sb
-          .from('profiles')
-          .select('trading_mode')
-          .eq('id', uid)
-          .single();
-        const mode = profile?.trading_mode || 'normal';
-        const [res, resScript] = await Promise.all([
-          fetch(`/api/user/segments?mode=${mode}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          fetch('/api/user/script-settings', {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-        if (res.ok) {
-          const sData = await res.json();
-          setSegmentSettings(sData || []);
-        }
-        if (resScript.ok) {
-          const ssData = await resScript.json();
-          setScriptSettings(ssData || []);
-        }
       } catch (err) {
-        console.error('Failed to get session or settings', err);
+        console.error('Failed to get session', err);
       }
     }
-    fetchUserIdAndSettings();
+    fetchUserId();
   }, []);
 
-  // Compute lot size: DB settings take priority over hardcoded fallbacks
+  // Compute lot size: DB script_settings take priority over hardcoded fallbacks.
+  // For MCX options (CRUDEOIL, GOLD, SILVER, NATURALGAS), the exchange publishes
+  // lot_size=1 per contract — use that directly instead of the futures multiplier.
   const lotSize = (() => {
     const n = symbol.toUpperCase();
     const sortedSettings = [...scriptSettings].sort((a, b) => b.symbol.length - a.symbol.length);
@@ -165,14 +146,7 @@ function OptionChainContent() {
     if (n.includes('MIDCP') || n.includes('MIDCAP')) return 120;
     if (n.includes('SENSEX')) return 20;
     if (n.includes('NIFTY')) return 65;
-    if (n.includes('GOLDM')) return 10;
-    if (n.includes('GOLD')) return 100;
-    if (n.includes('SILVERM')) return 5;
-    if (n.includes('SILVER')) return 30;
-    if (n.includes('CRUDEOILM')) return 10;
-    if (n.includes('CRUDEOIL')) return 100;
-    if (n.includes('NATGASMINI')) return 250;
-    if (n.includes('NATURALGAS')) return 1250;
+    // MCX options: 1 contract = 1 lot (lot_size=1 in Zerodha master)
     return 1;
   })();
 
@@ -216,6 +190,8 @@ function OptionChainContent() {
     }
   };
 
+  const lastSpotPriceRef = useRef<number>(0);
+
   // Toast State
   const [toast, setToast] = useState<{ msg: string; isError: boolean; visible: boolean }>({
     msg: '', isError: false, visible: false
@@ -229,8 +205,24 @@ function OptionChainContent() {
     }, 3500);
   };
 
+  const [errorModalMsg, setErrorModalMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => setErrorModalMsg((e as CustomEvent).detail || 'Order failed.');
+    window.addEventListener('order_error', handler);
+    return () => window.removeEventListener('order_error', handler);
+  }, []);
+
   // Normalization for MIDCAP
   const normalizedSymbol = symbol === 'MIDCAP' ? 'MIDCPNIFTY' : symbol;
+
+  // Compute user's strike range for INDEX-OPT from their segment settings
+  const userStrikeRange = React.useMemo(() => {
+    const isIndexOpt = symbol.includes('NIFTY') || symbol.includes('SENSEX') || symbol.includes('BANKEX');
+    const seg = isIndexOpt ? 'INDEX-OPT' : 'MCX-OPT';
+    const setting = segmentSettings.find(s => s.segment === seg);
+    return Number(setting?.strike_range ?? 0);
+  }, [segmentSettings, symbol]);
 
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
   const [showCharges, setShowCharges] = useState(false);
@@ -242,6 +234,7 @@ function OptionChainContent() {
     strikes: any[];
     expiry: string;
     underlyingPrice?: number;
+    underlyingSymbol?: string;
   } | null>(getLocalCache(cacheKey));
   
   const [loading, setLoading] = useState(!getLocalCache(cacheKey));
@@ -272,37 +265,24 @@ function OptionChainContent() {
       setLoading(true);
       setLoadingError(null);
       try {
-        const { getSharedSession } = await import('@/lib/sharedSession');
-        const { token } = await getSharedSession();
-        const headers: Record<string, string> = {};
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-
-        const url = `/api/market/option-chain?symbol=${normalizedSymbol}${selectedExpiry ? `&expiry=${selectedExpiry}` : ''}`;
-        const res = await fetch(url, { headers });
-        
-        if (res.status === 403) {
-          setLoadingError('locked');
-          return;
-        }
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success) {
-            setLocalCache(cacheKey, json);
-            setLocalCache(`${normalizedSymbol}_${json.expiry}`, json);
-            
-            setData(json);
-            if (!selectedExpiry) setSelectedExpiry(json.expiry);
-          } else {
-            setLoadingError(json.error || 'Failed to fetch option chain');
-          }
+        const spotPriceParam = lastSpotPriceRef.current > 0 ? `&spotPrice=${lastSpotPriceRef.current}` : '';
+        const url = `/api/market/option-chain?symbol=${normalizedSymbol}${selectedExpiry ? `&expiry=${selectedExpiry}` : ''}${spotPriceParam}&_t=${Date.now()}`;
+        const json = await api.get<{ success: boolean; expiry: string; error?: string; strikes: any[]; expiries: string[]; underlyingPrice?: number; underlyingSymbol?: string }>(url);
+        if (json.success) {
+          setLocalCache(cacheKey, json);
+          setLocalCache(`${normalizedSymbol}_${json.expiry}`, json);
+          setData(json);
+          if (!selectedExpiry) setSelectedExpiry(json.expiry);
         } else {
+          setLoadingError(json.error || 'Failed to fetch option chain');
+        }
+      } catch (err: any) {
+        if (err instanceof ApiError && err.status === 403) {
+          setLoadingError('locked');
+        } else {
+          console.error('Failed to fetch option chain', err);
           setLoadingError('Failed to fetch option chain');
         }
-      } catch (err) {
-        console.error('Failed to fetch option chain', err);
-        setLoadingError('Failed to fetch option chain');
       } finally {
         setLoading(false);
       }
@@ -313,37 +293,37 @@ function OptionChainContent() {
   // Extract all instrument IDs for real-time quotes
   const instrumentIds = React.useMemo(() => {
     if (!data) return [];
-    const underlyingId = symbol === 'NIFTY' ? 'NSE:NIFTY 50' :
-      symbol === 'BANKNIFTY' ? 'NSE:NIFTY BANK' :
-        symbol === 'FINNIFTY' ? 'NSE:NIFTY FIN SERVICE' :
-          symbol === 'MIDCAP' || symbol === 'MIDCPNIFTY' ? 'NSE:NIFTY MID SELECT' :
-            symbol === 'SENSEX' ? 'BSE:SENSEX' :
-              symbol === 'BANKEX' ? 'BSE:BANKEX' : null;
-    const ids: string[] = underlyingId ? [underlyingId] : [];
+    const ids: string[] = data.underlyingSymbol ? [data.underlyingSymbol] : [];
     data.strikes.forEach(s => {
       if (s.ce?.id) ids.push(s.ce.id);
       if (s.pe?.id) ids.push(s.pe.id);
     });
     return ids;
-  }, [data, symbol]);
+  }, [data]);
 
   const { quotes } = useMarketQuotes(instrumentIds);
   const connected = true;
 
-  const underlyingId = symbol === 'NIFTY' ? 'NSE:NIFTY 50' :
-    symbol === 'BANKNIFTY' ? 'NSE:NIFTY BANK' :
-      symbol === 'FINNIFTY' ? 'NSE:NIFTY FIN SERVICE' :
-        symbol === 'MIDCAP' || symbol === 'MIDCPNIFTY' ? 'NSE:NIFTY MID SELECT' :
-          symbol === 'SENSEX' ? 'BSE:SENSEX' :
-            symbol === 'BANKEX' ? 'BSE:BANKEX' : null;
-
   const spotPrice = React.useMemo(() => {
-    if (underlyingId) {
-      const q = quotes[underlyingId] || quotes[underlyingId.split(':')[1] || ''];
+    if (data?.underlyingSymbol) {
+      const sym = data.underlyingSymbol;
+      // Try full key first (e.g. "NSE:NIFTY 50"), then without exchange prefix,
+      // then without spaces, to handle any key-format mismatch from the quote feed
+      const q =
+        quotes[sym] ||
+        quotes[sym.split(':').pop() || sym] ||
+        quotes[sym.replace(/\s+/g, '_')] ||
+        quotes[sym.split(':').pop()?.replace(/\s+/g, '_') || sym];
       if (q && q.lastPrice) return q.lastPrice;
     }
     return data?.underlyingPrice || 0;
-  }, [underlyingId, quotes, data]);
+  }, [quotes, data]);
+
+  React.useEffect(() => {
+    if (spotPrice > 0) {
+      lastSpotPriceRef.current = spotPrice;
+    }
+  }, [spotPrice]);
 
   const handleTrade = (instrSymbol: string, side: 'BUY' | 'SELL') => {
     const strikeMatch = data?.strikes.find(s => s.ce?.symbol === instrSymbol || s.pe?.symbol === instrSymbol);
@@ -490,6 +470,7 @@ function OptionChainContent() {
                       spotPrice={spotPrice}
                       onTrade={handleTrade}
                       priceMode={priceMode}
+                      strikeRange={userStrikeRange}
                     />
                   </>
                 )}
@@ -497,8 +478,7 @@ function OptionChainContent() {
             )}
           </div>
 
-          <Footer activeTab="watchlist" />
-        </div>
+                  </div>
       </main>
 
       {/* Critical CSS inlined — prevents FOUC when CSS chunk loads late during client navigation */}
@@ -896,7 +876,8 @@ function OptionChainContent() {
             symbol: selectedContract.symbol,
             kiteSymbol: kiteId || selectedContract.symbol,
             segment: (symbol.includes('GOLD') || symbol.includes('SILVER') || symbol.includes('CRUDE') || symbol.includes('NATGAS') || symbol.includes('NATURALGAS')) ? 'MCX - Options' : (symbol.includes('SENSEX') || symbol.includes('BANKEX') ? 'BSE - Options' : 'NSE - Options'),
-            price: ltp // Passed down to let TradeSheet know the initial price, but it will fetch live
+            price: ltp, // Passed down to let TradeSheet know the initial price, but it will fetch live
+            lot_size: lotSize, // Ensures TradeSheet uses the correct lot size
           };
 
           return (
@@ -957,14 +938,16 @@ function OptionChainContent() {
           )}
         </div>
       </div>
+      <ErrorModal error={errorModalMsg} onClose={() => setErrorModalMsg(null)} title="Order Failed" />
     </div>
   );
 }
 
 export default function OptionChainPage() {
   return (
-    <Suspense fallback={<div className="loading-state">Loading...</div>}>
+    <Suspense fallback={<AnimatedLoader text="Loading..." />}>
       <OptionChainContent />
     </Suspense>
   );
 }
+

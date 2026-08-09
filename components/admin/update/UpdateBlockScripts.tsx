@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 
@@ -79,7 +79,7 @@ export default function UpdateBlockScripts({ selectedUser }: { selectedUser: { i
   return (
     <div className="adm-upd-root" style={{ padding: '0 0 40px 0' }}>
       <div className="adm-upd-section-title">Block Scripts &amp; Segments</div>
-      <p style={{ color: '#8b949e', fontSize: '14px', marginBottom: 20 }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: 20 }}>
         Prevent this user from trading specific instruments or entire segments as a risk control measure.
       </p>
 
@@ -126,7 +126,7 @@ export default function UpdateBlockScripts({ selectedUser }: { selectedUser: { i
       <div className="adm-upd-section-title" style={{ marginTop: 32 }}>Active Blocks</div>
       <div className="adm-upd-card" style={{ padding: '16px' }}>
         {(activeBlocks.symbols.length === 0 && activeBlocks.segments.length === 0) ? (
-          <div style={{ textAlign: 'center', color: '#8b949e', padding: '10px' }}>No active blocks for this user.</div>
+          <div style={{ textAlign: 'center', color: '#6b7280', padding: '10px' }}>No active blocks for this user.</div>
         ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {activeBlocks.segments.map(seg => (
@@ -136,9 +136,9 @@ export default function UpdateBlockScripts({ selectedUser }: { selectedUser: { i
               </div>
             ))}
             {activeBlocks.symbols.map(sym => (
-              <div key={sym} style={{ display: 'flex', alignItems: 'center', background: '#202a3b', color: '#58a6ff', padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: '1px solid #2e446e' }}>
+              <div key={sym} style={{ display: 'flex', alignItems: 'center', background: '#202a3b', color: '#2563eb', padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: '1px solid #2e446e' }}>
                 <span style={{ marginRight: '8px' }}>Symbol: {sym}</span>
-                <button onClick={() => handleUnblock('symbol', sym)} style={{ background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', fontSize: '16px', padding: 0 }}>&times;</button>
+                <button onClick={() => handleUnblock('symbol', sym)} style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: '16px', padding: 0 }}>&times;</button>
               </div>
             ))}
           </div>
@@ -149,4 +149,5 @@ export default function UpdateBlockScripts({ selectedUser }: { selectedUser: { i
     </div>
   );
 }
+
 

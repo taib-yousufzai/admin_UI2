@@ -1,9 +1,9 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import { useAuth } from '@/hooks/useAuth';
 import { updatePassword, getSession } from '@/lib/auth';
-import Sidebar from '@/components/Sidebar';
 import './page.css';
 
 export default function SecurityPage() {
@@ -84,8 +84,7 @@ export default function SecurityPage() {
 
     return (
         <div className="desktop-layout">
-            <Sidebar />
-            <main className="main-viewport">
+                        <main className="main-viewport">
                 <div className="sec-root">
             <div className="sec-header">
                 <div className="sec-header-inner">
@@ -160,7 +159,7 @@ export default function SecurityPage() {
                                 </div>
                             )}
                             <button type="submit" className="sec-save-btn" disabled={saving}>
-                                {saving ? <><i className="fas fa-spinner fa-spin"></i> Updating…</> : <><i className="fas fa-shield-alt"></i> Update Password</>}
+                                {saving ? <span style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}><AnimatedLoader size="small" /> Updating…</span> : <><i className="fas fa-shield-alt"></i> Update Password</>}
                             </button>
                         </form>
                     </div>

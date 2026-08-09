@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 
@@ -60,7 +60,7 @@ export default function UpdateLedger({ selectedUser }: { selectedUser: { id: str
   return (
     <div className="adm-upd-root" style={{ padding: '0 0 40px 0' }}>
       <div className="adm-upd-section-title">Manual Ledger Adjustment</div>
-      <p style={{ color: '#8b949e', fontSize: '14px', marginBottom: 20 }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: 20 }}>
         Manually credit or debit funds to the user&apos;s account for corrections, adjustments, or penalties.
       </p>
 
@@ -117,3 +117,4 @@ export default function UpdateLedger({ selectedUser }: { selectedUser: { id: str
     </div>
   );
 }
+

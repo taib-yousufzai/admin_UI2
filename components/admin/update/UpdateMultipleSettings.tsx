@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 import { SegmentSettingsType } from './UpdateSegments';
@@ -73,7 +73,7 @@ export default function UpdateMultipleSettings({ selectedUser: _selectedUser }: 
   return (
     <div className="adm-upd-root" style={{ padding: '0 0 40px 0' }}>
       <div className="adm-upd-section-title">Bulk Update Segment Settings</div>
-      <p style={{ color: '#8b949e', fontSize: '14px', marginBottom: 20 }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: 20 }}>
         Apply a specific segment configuration to all users under a specific Broker.
       </p>
 
@@ -233,3 +233,4 @@ export default function UpdateMultipleSettings({ selectedUser: _selectedUser }: 
     </div>
   );
 }
+

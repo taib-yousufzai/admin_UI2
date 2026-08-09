@@ -1,5 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { calculateCarryBrokerage } from './brokerage';
+import { calculateCarryBrokerage } from './trading/BrokerageCalculator';
 import { calculateFloatingPnl, calculateExitPrice, calculateFreeMargin } from './floatingPnl';
 
 export async function checkAndSquareOffPositionsForMargin(userId: string, adminClient: SupabaseClient) {
@@ -101,13 +101,12 @@ export async function checkAndSquareOffPositionsForMargin(userId: string, adminC
         });
 
         // Call RPC close_position
-        const { error: rpcErr } = await adminClient.rpc('close_position', {
-          p_position_id: pos.id,
-          p_user_id: userId,
-          p_ltp: baseLtp,
-          p_exit_price: exitPrice,
-          p_closed_by: 'SYSTEM_ACTION',
-          p_brokerage: carryBrokerage,
+        const { error: rpcErr } = await adminClient.rpc('close_position_v2', {
+          p_position_id:        pos.id,
+          p_close_qty:          Number(pos.qty_open),
+          p_close_price:        exitPrice,
+          p_closed_by:          'SYSTEM',
+          p_expected_brokerage: carryBrokerage,
         });
 
         if (!rpcErr) {
@@ -121,8 +120,7 @@ export async function checkAndSquareOffPositionsForMargin(userId: string, adminC
             created_at: new Date().toISOString()
           });
 
-          // Also update position's margin_required to 0 in database since it's closed
-          await adminClient.from('positions').update({ margin_required: 0 }).eq('id', pos.id);
+          // margin_required is already set to 0 atomically by close_position_v2
         }
       }
     }

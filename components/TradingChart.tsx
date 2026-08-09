@@ -2,17 +2,25 @@
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import ChartContainer from '@/components/chart/ChartContainer';
+import { ErrorModal } from '@/components/ErrorModal';
+import { getDefaultWatchlistItems, getTabForItem } from '@/app/watchlist/page';
 import { Candle } from '@/components/chart/types';
 import { useMyOrders } from '@/hooks/useMyOrders';
 import type { MyOrder } from '@/lib/types/order';
 import { useMyPositions, EnrichedPosition } from '@/hooks/useMyPositions';
 import { useOrderEntry } from '@/hooks/useOrderEntry';
 import { supabase } from '@/lib/supabaseClient';
+import { api, ApiError } from '@/lib/api';
 import OptionChainTable from '@/app/option-chain/OptionChainTable';
 import { useMarketQuotes } from '@/hooks/useMarketQuotes';
 import useSWR from 'swr';
 import { parseOptionSymbol } from '@/lib/parseOptionSymbol';
-import { calculateMarginPortion } from '@/lib/marginCalculator';
+import { calculateMarginPortion } from '@/lib/trading/MarginCalculator';
+import { mapSegmentToDbSegment } from '@/lib/trading/SymbolMapping';
+import { formatShortName } from '@/lib/datafeed/symbolResolver';
+import AnimatedLoader from '@/components/AnimatedLoader';
+import { useTradeConfig } from '@/contexts/TradeConfigContext';
+import { useBalance } from '@/hooks/useBalance';
 import './trading-chart.css';
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
@@ -25,13 +33,20 @@ const getUnderlyingSymbol = (sym: string) => {
   if (sym.includes('SENSEX')) return 'SENSEX';
   if (sym.includes('BANKEX')) return 'BANKEX';
 
-  const parsed = parseOptionSymbol(sym);
+  const clean = sym.includes(':') ? sym.split(':')[1] : sym;
+
+  const parsed = parseOptionSymbol(clean);
   if (parsed) {
     return parsed.underlying;
   }
 
-  if (sym.includes(':')) return sym.split(':')[1];
-  return sym;
+  // Handle Futures e.g. CRUDEOIL26AUGFUT or NIFTY24SEPFUT
+  const futMatch = clean.match(/^([A-Z]+)(\d{2}[A-Z0-9]{3})FUT$/i);
+  if (futMatch) {
+    return futMatch[1].toUpperCase();
+  }
+
+  return clean;
 };
 
 interface TradingChartProps {
@@ -41,51 +56,6 @@ interface TradingChartProps {
 }
 
 type Timeframe = '1m' | '5m' | '15m' | '60m' | 'day';
-
-function getLotSize(name: string, scriptSettings?: { symbol: string; lot_size: number }[]): number {
-  const n = name.toUpperCase();
-  if (scriptSettings && scriptSettings.length > 0) {
-    const sortedSettings = [...scriptSettings].sort((a, b) => b.symbol.length - a.symbol.length);
-    const match = sortedSettings.find(s => n.includes(s.symbol.toUpperCase()));
-    if (match) return Number(match.lot_size);
-  }
-  if (n.includes('BANKNIFTY') || n.includes('BANKEX')) return 15;
-  if (n.includes('FINNIFTY')) return 25;
-  if (n.includes('MIDCP') || n.includes('MIDCAP')) return 50;
-  if (n.includes('SENSEX')) return 10;
-  if (n.includes('NIFTY')) return 25;
-  if (n.includes('GOLDM')) return 10;
-  if (n.includes('GOLD')) return 100;
-  if (n.includes('SILVERM')) return 5;
-  if (n.includes('SILVER')) return 30;
-  if (n.includes('CRUDEOILM')) return 10;
-  if (n.includes('CRUDEOIL')) return 100;
-  if (n.includes('NATGASMINI')) return 250;
-  if (n.includes('NATURALGAS')) return 1250;
-  return 1;
-}
-
-function mapSegmentToDbSegment(s: string): string {
-  if (!s) return '';
-  const trimmed = s.trim();
-  if (['NSE - Futures', 'BSE - Futures', 'NFO - Futures', 'BFO - Futures'].includes(trimmed)) return 'INDEX-FUT';
-  if (['NSE - Options', 'BSE - Options', 'NFO - Options', 'BFO - Options'].includes(trimmed)) return 'INDEX-OPT';
-  if (['NSE - Stock Futures', 'BSE - Stock Futures', 'NFO - Stock Futures', 'BFO - Stock Futures'].includes(trimmed)) return 'STOCK-FUT';
-  if (['NSE - Stock Options', 'BSE - Stock Options', 'NFO - Stock Options', 'BFO - Stock Options'].includes(trimmed)) return 'STOCK-OPT';
-  if (trimmed === 'MCX - Futures') return 'MCX-FUT';
-  if (trimmed === 'MCX - Options') return 'MCX-OPT';
-  if (['NSE - Equity', 'BSE - Equity'].includes(trimmed)) return 'NSE-EQ';
-  if (trimmed === 'Crypto' || trimmed === 'CRYPTO') return 'CRYPTO';
-  if (trimmed === 'Forex' || trimmed === 'FOREX' || trimmed === 'CDS - Futures' || trimmed === 'CDS - Options') return 'FOREX';
-  if (trimmed === 'COMEX - Futures' || trimmed === 'COMEX - Options' || trimmed === 'COMEX' || trimmed === 'COI') return 'COMEX';
-  // Already-mapped DB keys — pass through directly
-  if (['INDEX-FUT', 'INDEX-OPT', 'STOCK-FUT', 'STOCK-OPT', 'MCX-FUT', 'MCX-OPT', 'NSE-EQ', 'CRYPTO', 'FOREX', 'COMEX'].includes(trimmed)) return trimmed;
-  // Legacy alias used by older code paths
-  if (trimmed === 'NFO-OPT') return 'INDEX-OPT';
-  if (trimmed === 'BFO-OPT') return 'INDEX-OPT';
-  if (trimmed === 'NFO-FUT') return 'INDEX-FUT';
-  return trimmed;
-}
 
 const SwipeableItem = ({ children, onDelete }: { children: React.ReactNode, onDelete: () => void }) => {
   const [translateX, setTranslateX] = useState(0);
@@ -174,37 +144,6 @@ const SEGMENT_TAB_MAP: Record<string, string> = {
   'COI': 'COMEX',
 };
 
-const DEFAULT_CRYPTO_ITEMS = [
-  { name: 'Bitcoin', symbol: 'BTC', kiteSymbol: '', binanceSymbol: 'BTCUSDT', price: 0, change: '0%', segment: 'Crypto', contractDate: '', open: 0, high: 0, low: 0, close: 0, category: 'CRYPTO' },
-  { name: 'Ethereum', symbol: 'ETH', kiteSymbol: '', binanceSymbol: 'ETHUSDT', price: 0, change: '0%', segment: 'Crypto', contractDate: '', open: 0, high: 0, low: 0, close: 0, category: 'CRYPTO' },
-  { name: 'Dogecoin', symbol: 'DOGE', kiteSymbol: '', binanceSymbol: 'DOGEUSDT', price: 0, change: '0%', segment: 'Crypto', contractDate: '', open: 0, high: 0, low: 0, close: 0, category: 'CRYPTO' },
-];
-
-const DEFAULT_FOREX_ITEMS = [
-  { name: 'USD/INR', symbol: 'USDINR_FUT', kiteSymbol: 'CDS:USDINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'EUR/INR', symbol: 'EURINR_FUT', kiteSymbol: 'CDS:EURINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'GBP/INR', symbol: 'GBPINR_FUT', kiteSymbol: 'CDS:GBPINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'JPY/INR', symbol: 'JPYINR_FUT', kiteSymbol: 'CDS:JPYINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-];
-
-const DEFAULT_COMEX_ITEMS = [
-  { name: 'Gold', symbol: 'GOLD_FUT', kiteSymbol: 'MCX:GOLD26AUGFUT', comexSymbol: 'GC=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'Silver', symbol: 'SILVER_FUT', kiteSymbol: 'MCX:SILVER26SEPFUT', comexSymbol: 'SI=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Sep 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'Crude Oil', symbol: 'CRUDEOIL_FUT', kiteSymbol: 'MCX:CRUDEOIL26JULFUT', comexSymbol: 'CL=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'Copper', symbol: 'COPPER_FUT', kiteSymbol: 'MCX:COPPER26JULFUT', comexSymbol: 'HG=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-];
-
-function getDefaultWatchlistItems() {
-  return [
-    { name: 'NIFTY 50 INDEX', symbol: 'NIFTY_INDEX', kiteSymbol: 'NSE:NIFTY 50', price: 22456.80, change: '+0.45%', segment: 'NSE - Futures', contractDate: '28 Mar 2025', open: 22350, high: 22580, low: 22320, close: 22456.80 },
-    { name: 'BANKNIFTY INDEX', symbol: 'BANKNIFTY_INDEX', kiteSymbol: 'NSE:NIFTY BANK', price: 48210.50, change: '-0.21%', segment: 'NSE - Futures', contractDate: '28 Mar 2025', open: 48350, high: 48500, low: 48100, close: 48210.50 },
-    { name: 'SENSEX INDEX', symbol: 'SENSEX_INDEX', kiteSymbol: 'BSE:SENSEX', price: 74230.15, change: '+0.32%', segment: 'BSE - Futures', contractDate: '28 Mar 2025', open: 73950, high: 74500, low: 73800, close: 74230.15 },
-    ...DEFAULT_CRYPTO_ITEMS,
-    ...DEFAULT_FOREX_ITEMS,
-    ...DEFAULT_COMEX_ITEMS,
-  ];
-}
-
 function getStoredWatchlistItems() {
   if (typeof window !== 'undefined' && (window as any).__watchlistItems && (window as any).__watchlistItems.length > 0) {
     return (window as any).__watchlistItems;
@@ -225,25 +164,6 @@ function getStoredWatchlistItems() {
     }
   } catch (e) { }
   return getDefaultWatchlistItems();
-}
-
-function getTabForItem(item: any): string {
-  if (item.category) {
-    const c = item.category.toUpperCase();
-    if (c.includes('INDEX - FUTURE')) return 'INDEX-FUT';
-    if (c.includes('INDEX - OPTIONS')) return 'INDEX-OPT';
-    if (c.includes('STOCKS - FUTURE')) return 'STOCK-FUT';
-    if (c.includes('MCX - FUTURE')) return 'MCX-FUT';
-    if (c.includes('MCX - OPTIONS')) return 'MCX-OPT';
-    if (c.includes('CRYPTO')) return 'CRYPTO';
-    if (c.includes('FOREX')) return 'FOREX';
-    if (c.includes('COMEX')) return 'COMEX';
-  }
-
-  if (item.segment && SEGMENT_TAB_MAP[item.segment]) {
-    return SEGMENT_TAB_MAP[item.segment];
-  }
-  return 'INDEX-FUT'; // Fallback
 }
 
 const ChartSearchOverlay = ({ onClose, onSelect, starredInstruments, toggleStar }: any) => {
@@ -436,6 +356,17 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   const [segment, setSegment] = useState(propSegment);
 
   useEffect(() => {
+    if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.unlock) {
+      try { screen.orientation.unlock(); } catch (e) {}
+    }
+    return () => {
+      if (typeof screen !== 'undefined' && screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('portrait').catch(() => {});
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setSymbol(propSymbol);
     setSegment(propSegment);
   }, [propSymbol, propSegment]);
@@ -486,6 +417,58 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     };
   }, []);
 
+  // Gyroscope-based rotation detection (bypasses OS/manifest portrait lock)
+  const lastPhysicalOrientation = useRef<'portrait' | 'landscape' | null>(null);
+  const targetOrientation = useRef<'portrait' | 'landscape' | null>(null);
+  const orientationTimeout = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const handleDeviceOrientation = (event: any) => {
+      const gamma = event.gamma;
+      const beta = event.beta;
+      if (gamma === null || beta === null) return;
+
+      const absGamma = Math.abs(gamma);
+      const absBeta = Math.abs(beta);
+
+      let detected: 'portrait' | 'landscape' | null = null;
+      
+      // Phone is tilted sideways (landscape)
+      if (absGamma > 50 && absBeta < 40) {
+        detected = 'landscape';
+      }
+      // Phone is held upright (portrait)
+      else if (absBeta > 50 && absGamma < 40) {
+        detected = 'portrait';
+      }
+
+      if (detected && detected !== targetOrientation.current) {
+        targetOrientation.current = detected;
+        
+        if (orientationTimeout.current) {
+          clearTimeout(orientationTimeout.current);
+        }
+        
+        // Add a 350ms delay so the rotation feels natural and doesn't flicker
+        orientationTimeout.current = setTimeout(() => {
+          if (lastPhysicalOrientation.current !== detected) {
+            lastPhysicalOrientation.current = detected;
+            setIsCssLandscape(detected === 'landscape');
+          }
+        }, 350);
+      }
+    };
+
+    if (typeof window !== 'undefined' && window.DeviceOrientationEvent) {
+      window.addEventListener('deviceorientation', handleDeviceOrientation);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('deviceorientation', handleDeviceOrientation);
+      }
+    };
+  }, []);
+
   const toggleStar = (item: any) => {
     setStarredInstruments(prev => {
       const isStarred = prev.some(p => p.kiteSymbol === item.kiteSymbol);
@@ -496,26 +479,6 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   };
 
 
-
-  // Indicators toggle state
-  const [activeIndicators, setActiveIndicators] = useState({
-    sma: false,
-    ema: false,
-    rsi: false,
-    macd: false
-  });
-
-  // Indicators values settings state
-  const [settings, setSettings] = useState({
-    smaPeriod: 20,
-    emaPeriod: 20,
-    rsiPeriod: 14,
-    macdFast: 12,
-    macdSlow: 26,
-    macdSignal: 9
-  });
-
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // For the legend overlay
   const [currentPrice, setCurrentPrice] = useState<number>(0);
@@ -531,9 +494,10 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     const s = symbol.toUpperCase();
     const spotIndices = [
       'NIFTY 50', 'NIFTY BANK', 'SENSEX', 'NIFTY FIN SERVICE', 'NIFTY MID SELECT', 'BANKEX',
-      'NSE:NIFTY 50', 'NSE:NIFTY BANK', 'BSE:SENSEX', 'NSE:NIFTY FIN SERVICE', 'NSE:NIFTY MID SELECT', 'BSE:BANKEX'
+      'NSE:NIFTY 50', 'NSE:NIFTY BANK', 'BSE:SENSEX', 'NSE:NIFTY FIN SERVICE', 'NSE:NIFTY MID SELECT', 'BSE:BANKEX',
+      'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'
     ];
-    return spotIndices.includes(s);
+    return spotIndices.includes(s) || s.endsWith('_INDEX');
   }, [symbol]);
 
   // --- Real Data Hooks ---
@@ -542,6 +506,11 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   const { placeOrder, closePosition } = useOrderEntry();
 
   // --- Dashboard States ---
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [addingPosId, setAddingPosId] = useState<string | null>(null);
+  const positionSnapshotRef = useRef<string | null>(null); // snapshot of position state at order time
+  const submitStartTimeRef = useRef<number>(0);
+  const submittingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isOrderBlockVisible, setIsOrderBlockVisible] = useState<boolean>(false);
   const [isTradeOnChartActive, setIsTradeOnChartActive] = useState<boolean>(false);
   const [orderSide, setOrderSide] = useState<'BUY' | 'SELL'>('BUY');
@@ -559,11 +528,14 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   const [chainContract, setChainContract] = useState<{ name: string; expiry: string; ltp: number; iv: number; bid: number; ask: number; kiteId?: string } | null>(null);
   const [activeSegment, setActiveSegment] = useState<'chain' | 'orders' | 'positions'>('orders');
   const [isPanelExpanded, setIsPanelExpanded] = useState<boolean>(false);
+  const [isInfoPanelCollapsed, setIsInfoPanelCollapsed] = useState<boolean>(true);
   const [isBottomSectionVisible, setIsBottomSectionVisible] = useState<boolean>(true);
-  const [balance, setBalance] = useState<number>(50000);
+  const [positionViewMode, setPositionViewMode] = useState<'cumulative' | 'detailed'>('cumulative');
   const [toast, setToast] = useState<{ visible: boolean; msg: string; isError?: boolean }>({ visible: false, msg: '' });
-  const [segmentSettings, setSegmentSettings] = useState<any[]>([]);
-  const [scriptSettings, setScriptSettings] = useState<{ symbol: string; lot_size: number }[]>([]);
+  // Config from the shared TradeConfigProvider — no local fetches needed
+  const { tradingMode, getLotSize, getSegment } = useTradeConfig();
+  // Balance from the global BalanceDataProvider — no local fetch needed
+  const { balance, refresh: refreshBalance } = useBalance();
 
   // ── CHARTINH Integration States ──
   const [activeOrderTab, setActiveOrderTab] = useState<'open' | 'executed'>('open');
@@ -573,13 +545,14 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   const [addMoreSymbol, setAddMoreSymbol] = useState<string | null>(null);
   const [addMoreSegment, setAddMoreSegment] = useState<string | null>(null);
   const [addMoreLtp, setAddMoreLtp] = useState<number | null>(null);
+  const [addMoreKiteInst, setAddMoreKiteInst] = useState<string | null>(null);
   const [postOrderSegment, setPostOrderSegment] = useState<'chain' | 'orders' | 'positions' | 'main' | null>(null);
   const [orderBlockTitle, setOrderBlockTitle] = useState<string>(symbol);
   const [modifyOrderId, setModifyOrderId] = useState<string | null>(null);
   const [showCharges, setShowCharges] = useState(false);
 
   const underlyingSym = getUnderlyingSymbol(symbol);
-  const isIndex = symbol.includes('NIFTY') || symbol.includes('BANKNIFTY') || symbol.includes('SENSEX') || symbol.includes('BANKEX');
+  const isIndex = (symbol.includes('NIFTY') || symbol.includes('SENSEX') || symbol.includes('BANKEX') || symbol === 'INDIA VIX') && !symbol.includes('FUT') && !symbol.includes('OPT') && !symbol.match(/(CE|PE)$/i);
 
   const { data: chainData, isLoading: chainLoading } = useSWR(
     activeSegment === 'chain' && !isCrypto && !segment.toUpperCase().includes('FOREX')
@@ -610,7 +583,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   const activeLiveQuote = marketQuotes[symbol] || (symbol === propSymbol ? propLiveQuote : null);
 
   const openChainOrder = (defaultAction: 'BUY' | 'SELL', contractName: string, expiry: string, ltp: number, iv: number, kiteId?: string) => {
-    setIsPanelExpanded(false);
+    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+    else setIsPanelExpanded(false);
     const bid = ltp;
     const ask = parseFloat((ltp + Math.max(0.05, ltp * 0.005)).toFixed(2));
     const contract = { name: contractName, expiry, ltp, iv, bid, ask, kiteId };
@@ -667,11 +641,11 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   };
 
   // Get lot size of instrument
-  const lotSize = useMemo(() => getLotSize(symbol, scriptSettings), [symbol, scriptSettings]);
+  const lotSize = useMemo(() => getLotSize(symbol), [symbol, getLotSize]);
 
   // Update qtyValue when lotSize changes (if user hasn't typed a custom qty yet)
   useEffect(() => {
-    if (!useLots && qtyValue === getLotSize(symbol, [])) {
+    if (!useLots && qtyValue === getLotSize(symbol)) {
       setQtyValue(lotSize);
     }
   }, [lotSize]);
@@ -705,53 +679,19 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     }
   };
 
-  const fetchBalance = async () => {
-    let token = '';
-    try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      token = sessionData.session?.access_token || '';
-      if (!token) return;
+  // Get user's actual funds balance is now handled by BalanceDataProvider
 
-      const res = await fetch('/api/pay/balance', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      const data = await res.json();
-      if (typeof data.balance === 'number') {
-        setBalance(data.balance);
-      }
-    } catch (err) {
-      // Use console.warn to avoid Next.js error overlay when adblockers block /api/pay/
-      console.warn('Failed to fetch balance (possibly blocked by adblocker):', err);
-    }
-
-    try {
-      if (!token) return;
-      // Fetch segment settings and script settings
-      const profileRes = await supabase.from('profiles').select('trading_mode').single();
-      const mode = profileRes.data?.trading_mode || 'normal';
-      const [settingsRes, scriptRes] = await Promise.all([
-        fetch(`/api/user/segments?mode=${mode}`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/user/script-settings', { headers: { Authorization: `Bearer ${token}` } }),
-      ]);
-      if (settingsRes.ok) {
-        const settingsData = await settingsRes.json();
-        setSegmentSettings(settingsData || []);
-      }
-      if (scriptRes.ok) {
-        const ssData = await scriptRes.json();
-        setScriptSettings(ssData || []);
-      }
-    } catch (err) {
-      console.warn('Failed to fetch segment or script settings:', err);
-    }
-  };
-
-  // Get user's actual funds balance
+  // Initialize Scalp toggle based on saved preference or trading mode from context
   useEffect(() => {
-    fetchBalance();
-  }, []);
+    const savedMode = localStorage.getItem('isTradeOnChartActive');
+    if (savedMode !== null) {
+      setIsTradeOnChartActive(savedMode === 'true');
+    } else {
+      setIsTradeOnChartActive(tradingMode === 'scalper');
+    }
+  // Only run once when tradingMode first becomes available
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tradingMode]);
 
   // Ensure default quantity is reset to 1 when the symbol changes
   useEffect(() => {
@@ -773,13 +713,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
 
         if (isCrypto) {
           const interval = getIntervalString();
-          let binanceSymbol = symbol.replace('/', '');
-          if (!binanceSymbol.endsWith('USDT')) {
-            binanceSymbol += 'USDT';
-          }
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${interval}&limit=500`);
-          const json = await res.json();
-          if (!Array.isArray(json)) throw new Error(json.msg || 'Failed to fetch');
+          const json = await api.get<any[]>(`/api/market/historical-crypto?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=500`);
+          if (!Array.isArray(json)) throw new Error('Failed to fetch');
           data = json.map((k: any) => ({
             timestamp: parseInt(k[0]),
             open: parseFloat(k[1]),
@@ -806,10 +741,9 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
           const to = toDate.toISOString().split('T')[0];
           const interval = getIntervalString();
 
-          const res = await fetch(`/api/market/historical?symbol=${encodeURIComponent(symbol)}&interval=${interval}&from=${from}&to=${to}`);
-          const json = await res.json();
+          const json = await api.get<{ candles?: any[]; error?: string }>(`/api/market/historical?symbol=${encodeURIComponent(symbol)}&interval=${interval}&from=${from}&to=${to}`);
 
-          if (res.ok && json.candles) {
+          if (json.candles) {
             data = json.candles.map((c: any) => {
               const dt = new Date(c[0]);
               return {
@@ -913,6 +847,11 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     });
   };
 
+  const handlePlaceOrder = async () => {
+    if (isSubmitting) return;
+    handleSubmitOrder();
+  };
+
   // Place actual order
   const handleSubmitOrder = async () => {
     const qVal = Number(qtyValue) || 0;
@@ -921,6 +860,7 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       return;
     }
     const finalQty = useLots ? (isCrypto ? qVal * lotSize : Math.round(qVal * lotSize)) : (isCrypto ? qVal : Math.round(qVal));
+    const finalLots = useLots ? qVal : (finalQty / lotSize);
 
     // Determine the base execution price
     // For add-more/exit flow on a different instrument, use that position's LTP not the chart price
@@ -951,8 +891,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       }
       return mapSegmentToDbSegment(segment);
     })();
-    const buySetting = segmentSettings.find(s => s.segment === submitDbSeg && s.side === 'BUY');
-    const sellSetting = segmentSettings.find(s => s.segment === submitDbSeg && s.side === 'SELL');
+    const buySetting = getSegment(submitDbSeg, 'BUY');
+    const sellSetting = getSegment(submitDbSeg, 'SELL');
     const segSetting = orderSide === 'SELL' ? sellSetting : buySetting;
 
     const intradayLeverage = segSetting?.intraday_leverage ?? 10;
@@ -983,7 +923,7 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       }
     }
 
-    let orderKiteInstrument = orderSymbol;
+    let orderKiteInstrument = (isAddMoreFlow || isExitFlow) && addMoreKiteInst ? addMoreKiteInst : orderSymbol;
 
     if (chainContract) {
       orderSymbol = chainContract.name;
@@ -991,10 +931,19 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       const underlying = symbol.toUpperCase().replace('_INDEX', '').replace('NSE:', '').replace('INDEX', '').trim();
       let prefix = 'NFO';
       if (underlying.includes('SENSEX') || underlying.includes('BANKEX')) prefix = 'BFO';
-      else if (['GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS'].includes(underlying)) prefix = 'MCX';
+      else if (['GOLD', 'SILVER', 'CRUDE', 'NATGAS', 'NATURALGAS', 'COPPER', 'ZINC', 'ALUMINIUM', 'LEAD'].some(c => underlying.startsWith(c))) prefix = 'MCX';
 
       orderKiteInstrument = chainContract.kiteId || `${prefix}:${orderSymbol}`;
       orderSegment = 'INDEX-OPT';
+    } else {
+      // For exit/add-more flows on options and futures, ensure kite instrument has prefix
+      if (orderSymbol && (orderSymbol.endsWith('CE') || orderSymbol.endsWith('PE') || orderSymbol.endsWith('FUT') || orderSymbol.includes('FUT')) && !orderKiteInstrument.includes(':')) {
+        let prefix = 'NFO';
+        if (orderSymbol.startsWith('SENSEX') || orderSymbol.startsWith('BANKEX')) prefix = 'BFO';
+        else if (['GOLD', 'SILVER', 'CRUDE', 'NATGAS', 'NATURALGAS', 'COPPER', 'ZINC', 'ALUMINIUM', 'LEAD'].some(c => orderSymbol.startsWith(c))) prefix = 'MCX';
+        else if (orderSymbol.startsWith('EURINR') || orderSymbol.startsWith('USDINR') || orderSymbol.startsWith('GBPINR') || orderSymbol.startsWith('JPYINR')) prefix = 'CDS';
+        orderKiteInstrument = `${prefix}:${orderSymbol}`;
+      }
     }
 
     if (modifyOrderId) {
@@ -1008,53 +957,63 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       showToast('Placing order...');
     }
 
-    const res = await placeOrder({
+    // Optimistic UI: Immediately close panel and show processing state
+    setIsSubmitting(true);
+    positionSnapshotRef.current = currentInstrumentPosition ? `${currentInstrumentPosition.id}:${currentInstrumentPosition.qty_open}` : '__none__';
+    if (modifyOrderId) {
+      setModifyOrderId(null);
+    }
+    setIsOrderBlockVisible(false);
+    setChainContract(null);
+    setIsExitFlow(false);
+    setIsAddMoreFlow(false);
+    setAddMoreSymbol(null);
+    setAddMoreSegment(null);
+    setAddMoreLtp(null);
+    setAddMoreKiteInst(null);
+    setExitPositionId(null);
+    setOrderBlockTitle(symbol);
+    
+    const returnTo = postOrderSegment;
+    setPostOrderSegment(null);
+    if (returnTo && returnTo !== 'main') {
+      setActiveSegment(returnTo as 'chain' | 'orders' | 'positions');
+      setIsPanelExpanded(true);
+    }
+
+    placeOrder({
       symbol: orderSymbol,
       kite_instrument: orderKiteInstrument,
       segment: orderSegment,
       side: orderSide,
       qty: finalQty,
-      lots: useLots ? Number(qtyValue) : 0,
+      lots: finalLots,
       order_type: orderType.toUpperCase() as any,
       product_type: orderCarry === 'carry' ? 'CARRY' : 'INTRADAY',
-      client_price: orderType === 'market' ? 0 : finalPrice,
+      client_price: finalPrice,
       trigger_price: (orderType === 'sl' || orderType === 'slm') ? parseFloat(triggerPrice) : undefined,
       stop_loss: gttSlPrice ? parseFloat(gttSlPrice) : undefined,
       target: gttTargetPrice ? parseFloat(gttTargetPrice) : undefined,
       is_exit: isExitFlow
-    });
-
-    if (res.success) {
-      if (modifyOrderId) {
-        showToast('Order Modified Successfully!');
-        setModifyOrderId(null);
+    }).then(res => {
+      if (res.success) {
+        showToast(modifyOrderId ? 'Order Modified Successfully!' : `${orderSide} Order Placed Successfully!`);
+        refreshOrders();
+        refreshBalance();
+        window.dispatchEvent(new CustomEvent('position-closed'));
+        // isSubmitting stays true — cleared by useEffect when positions refresh
+        // Safety fallback in case positions never update
+        submittingTimeoutRef.current = setTimeout(() => { setIsSubmitting(false); positionSnapshotRef.current = null; }, 2500);
       } else {
-        showToast(`${orderSide} Order Placed Successfully!`);
+        showToast(res.error || 'Failed to place order', true);
+        setIsSubmitting(false);
+        positionSnapshotRef.current = null;
       }
-      setIsOrderBlockVisible(false);
-      setChainContract(null);
-      setIsExitFlow(false);
-      setIsAddMoreFlow(false);
-      setAddMoreSymbol(null);
-      setAddMoreSegment(null);
-      setAddMoreLtp(null);
-      setExitPositionId(null);
-      setOrderBlockTitle(symbol);
-      refreshOrders();
-      refreshPositions();
-      fetchBalance();
-      window.dispatchEvent(new CustomEvent('position-closed'));
-
-      // Post-order navigation: return to originating segment
-      const returnTo = postOrderSegment;
-      setPostOrderSegment(null);
-      if (returnTo && returnTo !== 'main') {
-        setActiveSegment(returnTo as 'chain' | 'orders' | 'positions');
-        setIsPanelExpanded(true);
-      }
-    } else {
-      showToast(res.error || 'Failed to place order', true);
-    }
+    }).catch(err => {
+      showToast(err?.message || 'Failed to place order', true);
+      setIsSubmitting(false);
+      positionSnapshotRef.current = null;
+    });
   };
 
   // Cancel actual order
@@ -1064,7 +1023,7 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     if (res.success) {
       showToast('Order cancelled');
       refreshOrders();
-      fetchBalance();
+      refreshBalance();
       if (modifyOrderId === id) {
         setModifyOrderId(null);
         setIsOrderBlockVisible(false);
@@ -1076,7 +1035,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   };
 
   const handleModifyOrder = (o: MyOrder) => {
-    setIsPanelExpanded(false);
+    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+    else setIsPanelExpanded(false);
     setModifyOrderId(o.id);
     setOrderSide(o.side);
     setQtyValue(o.qty);
@@ -1096,7 +1056,13 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
 
   // Exit position via order panel (allows choosing Market/SL)
   const handleExitPosition = (pos: EnrichedPosition) => {
-    setIsPanelExpanded(false);
+    if (isTradeOnChartActive) {
+      handleQuickExit(pos);
+      return;
+    }
+
+    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+    else setIsPanelExpanded(false);
     setIsExitFlow(true);
     setIsAddMoreFlow(false);
     setExitPositionId(pos.id);
@@ -1104,7 +1070,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     // Also set the target symbol info so the order block UI shows the correct position prices
     // instead of the chart's current instrument prices
     setAddMoreSymbol(pos.symbol);
-    setAddMoreSegment(pos.settlement || segment);
+    setAddMoreSegment(pos.settlement || pos.segment || segment);
+    setAddMoreKiteInst(pos.kite_instrument || pos.symbol);
     setAddMoreLtp(pos.current_ltp || pos.avg_price || pos.entry_price);
 
     setOrderSide(pos.side === 'BUY' ? 'SELL' : 'BUY');
@@ -1120,55 +1087,202 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     setIsOrderBlockVisible(true);
   };
 
-  // Direct quick-exit (instant market close)
-  const handleQuickExit = async (id: string) => {
-    showToast('Exiting position...');
-    const res = await closePosition(id);
+  const quickExitLock = useRef(false);
+  const exitingPosIds = useRef<Set<string>>(new Set());
+  const [, setForceRender] = useState(0);
+
+  // Direct quick-exit (instant market close of selected lot size)
+  const handleQuickExit = async (pos: EnrichedPosition) => {
+    if (quickExitLock.current || exitingPosIds.current.has(pos.id)) return;
+    quickExitLock.current = true;
+    exitingPosIds.current.add(pos.id);
+    setForceRender(prev => prev + 1);
+
+    const posLotSize = getLotSize(pos.symbol);
+    const selectedQtyRaw = parseFloat(String(qtyValue)) || 0;
+    const selectedQty = useLots ? selectedQtyRaw * posLotSize : selectedQtyRaw;
+    const finalQty = selectedQty > 0 ? Math.min(pos.qty_open, selectedQty) : pos.qty_open;
+
+    if (finalQty <= 0) {
+      quickExitLock.current = false;
+      exitingPosIds.current.delete(pos.id);
+      setForceRender(prev => prev + 1);
+      return;
+    }
+
+    const exitSide = pos.side === 'BUY' ? 'SELL' : 'BUY';
+    const effectiveLots = finalQty / posLotSize;
+
+    showToast(`Placing quick exit order...`);
+    const res = await placeOrder({
+      symbol: pos.symbol,
+      kite_instrument: pos.kite_instrument || pos.symbol,
+      segment: pos.settlement || segment,
+      side: exitSide,
+      qty: finalQty,
+      lots: effectiveLots,
+      order_type: 'MARKET',
+      product_type: pos.product_type || 'INTRADAY',
+      client_price: pos.current_ltp || pos.avg_price || pos.entry_price || currentPrice,
+      is_exit: true,
+      linked_position_id: positionViewMode === 'detailed' ? pos.id : undefined
+    });
+
     if (res.success) {
-      showToast('Position closed');
-      refreshPositions();
-      fetchBalance();
-      window.dispatchEvent(new CustomEvent('position-closed'));
+      showToast(`Quick exit order placed`);
+      refreshOrders();
+      setTimeout(() => {
+        refreshBalance();
+        refreshBalance();
+        quickExitLock.current = false;
+      }, 1000); // Give DB time to match
+      // Safety: unlock the exit button after 5s in case the position didn't actually close
+      setTimeout(() => {
+        exitingPosIds.current.delete(pos.id);
+        setForceRender(prev => prev + 1);
+      }, 5000);
     } else {
       showToast(res.error || 'Exit failed', true);
+      quickExitLock.current = false;
+      exitingPosIds.current.delete(pos.id);
+      setForceRender(prev => prev + 1);
     }
   };
 
   // Add more to a position (may be a different symbol from the current chart)
   const handleAddMorePosition = (pos: EnrichedPosition) => {
-    setIsPanelExpanded(false);
+    if (isSubmitting) return;
+    if (!isTradeOnChartActive) {
+      if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+      else setIsPanelExpanded(false);
+    }
     setIsExitFlow(false);
     setIsAddMoreFlow(true);
     setExitPositionId(null);
     setAddMoreSymbol(pos.symbol);
     setAddMoreSegment(pos.settlement || segment);
     setAddMoreLtp(pos.current_ltp || pos.avg_price || pos.entry_price);
+    setAddMoreKiteInst(pos.kite_instrument || pos.symbol);
     setOrderSide(pos.side);
     setQtyValue(pos.qty_open);
     setUseLots(false);
     setOrderCarry(pos.product_type === 'CARRY' ? 'carry' : 'normal');
     setOrderType('market');
+    
+    // Direct Execution for Scalping Mode (directly placing order, showing bm-loader)
+    if (isTradeOnChartActive) {
+      const posLotSize = getLotSize(pos.symbol);
+      const qVal = posLotSize;
+      const dbSeg = mapSegmentToDbSegment(segment);
+      const segSetting = getSegment(dbSeg, pos.side);
+      const leverage = pos.product_type === 'CARRY' ? (segSetting?.holding_leverage ?? 10) : (segSetting?.intraday_leverage ?? 10);
+      const levType = pos.product_type === 'CARRY' ? (segSetting?.holding_type ?? 'Multiplier') : (segSetting?.intraday_type ?? 'Multiplier');
+      const required = Math.round(levType === '%' ? (currentPrice * qVal) * (leverage / 100) : (levType === 'Fixed' ? (qVal / posLotSize) * leverage : (currentPrice * qVal) / leverage));
+
+      if (required > balance) {
+        showToast(`Insufficient margin! Need ₹${required.toLocaleString('en-IN')}`, true);
+        return;
+      }
+
+      setIsSubmitting(true);
+      setAddingPosId(pos.id);
+      submitStartTimeRef.current = Date.now();
+      positionSnapshotRef.current = `${pos.id}:${pos.qty_open}`;
+
+      placeOrder({
+        symbol: pos.symbol,
+        kite_instrument: pos.kite_instrument || pos.symbol,
+        segment: pos.settlement || segment,
+        side: pos.side,
+        qty: qVal,
+        lots: 1,
+        order_type: 'MARKET',
+        product_type: pos.product_type === 'CARRY' ? 'CARRY' : 'INTRADAY',
+        client_price: 0,
+        is_exit: false
+      }).then(res => {
+        if (res.success) {
+          showToast(`Successfully added ${qVal} to position!`);
+          refreshOrders();
+          refreshPositions();
+          refreshBalance();
+          refreshBalance();
+          window.dispatchEvent(new Event('order_placed'));
+          window.dispatchEvent(new CustomEvent('position-closed'));
+          
+          // Safety timeout to clear isSubmitting / loader
+          submittingTimeoutRef.current = setTimeout(() => {
+            setIsSubmitting(false);
+            setAddingPosId(null);
+            positionSnapshotRef.current = null;
+            window.dispatchEvent(new Event('global-loader-end'));
+          }, 8000);
+        } else {
+          showToast(res.error || 'Failed to add to position', true);
+          setIsSubmitting(false);
+          setAddingPosId(null);
+          positionSnapshotRef.current = null;
+          window.dispatchEvent(new Event('global-loader-end'));
+        }
+      }).catch(err => {
+        showToast(err?.message || 'Failed to add to position', true);
+        setIsSubmitting(false);
+        setAddingPosId(null);
+        positionSnapshotRef.current = null;
+        window.dispatchEvent(new Event('global-loader-end'));
+      });
+      return;
+    }
+
     setOrderBlockTitle(`Add More · ${pos.symbol}`);
     setPostOrderSegment('main');
     setIsOrderBlockVisible(true);
   };
 
+  const quickEntryLock = useRef(false);
+
   const handleQuickMarketOrder = async (side: 'BUY' | 'SELL') => {
+    if (quickEntryLock.current || isSubmitting) return;
+    quickEntryLock.current = true;
+    setIsSubmitting(true);
+    positionSnapshotRef.current = currentInstrumentPosition ? `${currentInstrumentPosition.id}:${currentInstrumentPosition.qty_open}` : '__none__';
+    setOrderSide(side);
+
     const qVal = Number(qtyValue) || 0;
     if (qVal <= 0) {
       showToast("Invalid quantity", true);
+      quickEntryLock.current = false;
+      setIsSubmitting(false);
       return;
     }
-    const finalQty = useLots ? (isCrypto ? qVal * lotSize : Math.round(qVal * lotSize)) : (isCrypto ? qVal : Math.round(qVal));
+    const isScalper = tradingMode === 'scalper';
+    const effectiveUseLots = isScalper ? true : useLots;
 
+    // In scalp mode qtyValue is always in lots. Guard against a stale exit-qty
+    // (e.g. 1500 units from a previous exit flow) being treated as lot count,
+    // which would multiply by lotSize again and blow past max_order_lot.
     const dbSeg = mapSegmentToDbSegment(segment);
-    const segSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === side);
+    const segSetting = getSegment(dbSeg, side);
+    const maxOrderLot = segSetting?.max_order_lot ?? segSetting?.max_lot ?? 50;
+
+    // If qty exceeds max, show error, correct input to max, and abort — don't silently clamp.
+    if (effectiveUseLots && maxOrderLot > 0 && qVal > maxOrderLot) {
+      showToast(`Max allowed: ${maxOrderLot} lots (${maxOrderLot * lotSize} qty). Corrected to maximum.`, true);
+      setQtyValue(String(maxOrderLot));
+      quickEntryLock.current = false;
+      setIsSubmitting(false);
+      return;
+    }
+
+    const finalQty = effectiveUseLots ? (isCrypto ? qVal * lotSize : Math.round(qVal * lotSize)) : (isCrypto ? qVal : Math.round(qVal));
     const intradayLeverage = segSetting?.intraday_leverage ?? 10;
     const intradayType = segSetting?.intraday_type ?? 'Multiplier';
     const required = Math.round(intradayType === '%' ? (currentPrice * finalQty) * (intradayLeverage / 100) : (intradayType === 'Fixed' ? (finalQty / lotSize) * intradayLeverage : (currentPrice * finalQty) / intradayLeverage));
 
     if (required > balance) {
       showToast(`Insufficient margin! Need ₹${required.toLocaleString('en-IN')}`, true);
+      quickEntryLock.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1179,10 +1293,10 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       segment: segment,
       side: side,
       qty: finalQty,
-      lots: useLots ? qVal : 0,
+      lots: effectiveUseLots ? qVal : (finalQty / lotSize),
       order_type: 'MARKET',
       product_type: 'INTRADAY',
-      client_price: 0,
+      client_price: currentPrice,
       is_exit: false
     });
 
@@ -1196,24 +1310,39 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         btn.classList.add('quick-flash');
       }
       refreshOrders();
-      refreshPositions();
-      fetchBalance();
+      refreshBalance();
+      refreshBalance();
       window.dispatchEvent(new CustomEvent('position-closed'));
     } else {
       showToast(res.error || 'Failed to place quick order', true);
+      // On failure, release immediately
+      setIsSubmitting(false);
+      positionSnapshotRef.current = null;
+    }
+    
+    // Release click lock after debounce
+    setTimeout(() => { quickEntryLock.current = false; }, 500);
+    // isSubmitting stays true on success — cleared by useEffect when positions refresh
+    // Safety fallback in case positions never update
+    if (res.success) {
+      submittingTimeoutRef.current = setTimeout(() => { setIsSubmitting(false); positionSnapshotRef.current = null; }, 2500);
     }
   };
 
   const handleQuickAddPosition = async (pos: EnrichedPosition) => {
+    if (quickEntryLock.current) return;
+    quickEntryLock.current = true;
+
     const addQty = pos.qty_open;
     const dbSeg = mapSegmentToDbSegment(segment);
-    const segSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === pos.side);
+    const segSetting = getSegment(dbSeg, pos.side);
     const leverage = pos.product_type === 'CARRY' ? (segSetting?.holding_leverage ?? 10) : (segSetting?.intraday_leverage ?? 10);
     const levType = pos.product_type === 'CARRY' ? (segSetting?.holding_type ?? 'Multiplier') : (segSetting?.intraday_type ?? 'Multiplier');
     const required = Math.round(levType === '%' ? (currentPrice * addQty) * (leverage / 100) : (levType === 'Fixed' ? (addQty / lotSize) * leverage : (currentPrice * addQty) / leverage));
 
     if (required > balance) {
       showToast(`Insufficient margin! Need ₹${required.toLocaleString('en-IN')}`, true);
+      quickEntryLock.current = false;
       return;
     }
 
@@ -1234,12 +1363,15 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     if (res.success) {
       showToast(`Successfully added ${addQty} to position!`);
       refreshOrders();
-      refreshPositions();
-      fetchBalance();
+      refreshBalance();
+      refreshBalance();
       window.dispatchEvent(new CustomEvent('position-closed'));
     } else {
       showToast(res.error || 'Failed to add to position', true);
     }
+    
+    // Release entry lock after a short debounce to prevent mouse-bounces
+    setTimeout(() => { quickEntryLock.current = false; }, 500);
   };
 
   // All open/active positions (not filtered by symbol)
@@ -1249,10 +1381,14 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
 
   // Instrument-specific position: find open position matching the currently viewed chart symbol
   const currentInstrumentPosition = useMemo(() => {
-    const matchingPositions = positions.filter(p =>
-      (p.status === 'open' || p.status === 'active') &&
-      p.symbol === symbol
-    );
+    const matchingPositions = positions.filter(p => {
+      if (p.status !== 'open' && p.status !== 'active') return false;
+      if (p.symbol === symbol) return true;
+      if (p.kite_instrument === symbol) return true;
+      if (p.symbol + 'USDT' === symbol) return true;
+      if (symbol + 'USDT' === p.symbol) return true;
+      return false;
+    });
     if (matchingPositions.length === 0) return null;
 
     // Group them like Cumulative view
@@ -1260,6 +1396,49 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     const repPos = matchingPositions[0]; // just take first for other metadata
     return { ...repPos, qty_open: totalQty };
   }, [positions, symbol]);
+
+  // ── Watch for position changes while submitting ──
+  // Keep buttons in loading state until positions actually refresh and the UI changes
+  useEffect(() => {
+    if (!isSubmitting || positionSnapshotRef.current === null) return;
+
+    const snapshotId = positionSnapshotRef.current.split(':')[0];
+
+    let changed = false;
+
+    if (snapshotId === '__none__') {
+      // New position case: we had no open position before the order.
+      // Clear isSubmitting as soon as ANY open/active position for this symbol appears.
+      const hasNewPos = positions.some(
+        p => p.symbol === symbol && (p.status === 'open' || p.status === 'active')
+      );
+      changed = hasNewPos;
+    } else {
+      // Existing position case: qty changed or position closed
+      const targetPos = positions.find(
+        p => p.id === snapshotId && (p.status === 'open' || p.status === 'active')
+      );
+      const snapshotQty = Number(positionSnapshotRef.current.split(':')[1]);
+      const currentKey = targetPos ? `${targetPos.id}:${targetPos.qty_open}` : '__none__';
+      changed = currentKey !== positionSnapshotRef.current || (targetPos?.qty_open !== snapshotQty);
+    }
+
+    if (changed) {
+      // Enforce a minimum display time of 1500ms for the loading animation
+      const elapsed = Date.now() - submitStartTimeRef.current;
+      const delay = Math.max(0, 1500 - elapsed);
+      setTimeout(() => {
+        setIsSubmitting(false);
+        setAddingPosId(null);
+        positionSnapshotRef.current = null;
+        window.dispatchEvent(new Event('global-loader-end'));
+        if (submittingTimeoutRef.current) {
+          clearTimeout(submittingTimeoutRef.current);
+          submittingTimeoutRef.current = null;
+        }
+      }, delay);
+    }
+  }, [positions, isSubmitting, symbol]);
 
   // Calculated Required Margin for current order block state
   // Determine if the current chart symbol is itself an option/futures contract
@@ -1330,8 +1509,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
   })();
 
   const dbSeg = effectiveDbSeg;
-  const buySetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'BUY');
-  const sellSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'SELL');
+  const buySetting = getSegment(dbSeg, 'BUY');
+  const sellSetting = getSegment(dbSeg, 'SELL');
   const segSetting = orderSide === 'SELL' ? sellSetting : buySetting;
 
   const intradayLeverage = segSetting?.intraday_leverage ?? 10;
@@ -1395,7 +1574,14 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         return <div className="empty-state">Option Chain not available for this segment.</div>;
       }
       if (chainLoading) {
-        return <div className="empty-state">Loading chain...</div>;
+        return (
+          <div style={{ padding: '40px 0' }}>
+            <AnimatedLoader text="Loading option chain..." fullScreen={false} />
+          </div>
+        );
+      }
+      if (!chainStrikes || chainStrikes.length === 0) {
+        return <div className="empty-state">Option chain data is currently unavailable for {symbol}.</div>;
       }
 
       const handleTableTrade = (tradeSymbol: string, defaultAction: 'BUY' | 'SELL') => {
@@ -1427,7 +1613,7 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
           <OptionChainTable
             strikes={mappedStrikes}
             quotes={marketQuotes}
-            spotPrice={currentPrice || 71.00}
+            spotPrice={chainData?.underlyingPrice || currentPrice || 71.00}
             onTrade={handleTableTrade}
             priceMode="LTP"
             stickyTop={0}
@@ -1496,71 +1682,171 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       );
     }
 
-    // Positions — Rich Layout matching CHARTINH.html exactly
+    // Positions — Cumulative / Detailed view
     if (currentSymbolPositions.length === 0) {
       return <div className="empty-state">No active positions.</div>;
     }
 
-    // Group positions by symbol, side, and product_type to show cumulative totals
-    const groupedPositionsMap = new Map();
+    // ── Cumulative grouping ──
+    const groupedPositionsMap = new Map<string, any>();
     for (const pos of currentSymbolPositions) {
       const key = `${pos.symbol}|${pos.side}|${pos.product_type}`;
       if (!groupedPositionsMap.has(key)) {
-        groupedPositionsMap.set(key, { ...pos });
+        groupedPositionsMap.set(key, { ...pos, _ids: [pos.id], _count: 1 });
       } else {
         const existing = groupedPositionsMap.get(key);
         const entryA = existing.avg_price || existing.entry_price || 0;
         const entryB = pos.avg_price || pos.entry_price || 0;
-        const totalValue = (existing.qty_open * entryA) + (pos.qty_open * entryB);
-        existing.qty_open += pos.qty_open;
-        existing.entry_price = totalValue / existing.qty_open;
-        existing.avg_price = totalValue / existing.qty_open;
+        const totalQty = existing.qty_open + pos.qty_open;
+        existing.qty_open = totalQty;
+        existing.avg_price = totalQty > 0 ? (entryA * existing._ids.length + entryB) / (existing._ids.length + 1) : entryA;
+        existing.entry_price = existing.avg_price;
         existing.unrealised_pnl = (existing.unrealised_pnl || 0) + (pos.unrealised_pnl || 0);
-        // Do NOT aggregate 'id' to a string, just keep the first representative pos ID for handleExitPosition
+        existing._ids.push(pos.id);
+        existing._count += 1;
       }
     }
     const groupedPositions = Array.from(groupedPositionsMap.values());
 
-    return groupedPositions.map((pos) => {
-      const entryPrice = pos.avg_price || pos.entry_price;
-      const pnl = pos.unrealised_pnl ?? 0;
-      const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-      const sideBg = pos.side === 'BUY' ? 'var(--green-bg)' : 'var(--red-bg)';
-      const sideClr = pos.side === 'BUY' ? 'var(--green-text)' : 'var(--red-text)';
-      return (
-        <div key={pos.id} className="position-row">
-          <div className="position-info-row">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{pos.symbol}</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <span style={{ fontWeight: 700, color: sideClr, fontSize: '10px', background: sideBg, padding: '1px 6px', borderRadius: '4px' }}>
-                  {pos.side}
-                </span>
-                <span style={{ color: 'var(--pill-text)', fontSize: '11px' }}>{pos.qty_open} qty</span>
+    // Detailed = individual positions sorted newest first
+    const detailedPositions = [...currentSymbolPositions].sort(
+      (a, b) => new Date(b.entry_time || 0).getTime() - new Date(a.entry_time || 0).getTime()
+    );
+
+    const fmtPnl = (pnl: number) => `${pnl >= 0 ? '+' : '-'}₹${Math.abs(pnl).toFixed(2)}`;
+    const fmtPrice = (v: number) => `₹${v.toFixed(2)}`;
+
+    const positionsToRender = positionViewMode === 'cumulative' ? groupedPositions : detailedPositions;
+
+    return (
+      <>
+        {/* Cumulative / Detailed Toggle */}
+        <div style={{
+          display: 'flex',
+          borderBottom: '2px solid var(--border-light, #E8ECF0)',
+          background: 'var(--container-bg, #fff)',
+          flexShrink: 0,
+          width: 'calc(100% + 1rem)',
+          margin: '-0.5rem -0.5rem 0 -0.5rem'
+        }}>
+          <button
+            onClick={() => setPositionViewMode('cumulative')}
+            style={{
+              flex: 1, padding: '7px 0', fontSize: '11px',
+              fontWeight: positionViewMode === 'cumulative' ? 700 : 600,
+              border: 'none', borderRadius: 0, cursor: 'pointer',
+              background: 'transparent',
+              color: positionViewMode === 'cumulative' ? 'var(--navy, #101828)' : 'var(--text-secondary, #6b7280)',
+              borderBottom: positionViewMode === 'cumulative' ? '2.5px solid var(--navy, #101828)' : '2.5px solid transparent',
+              marginBottom: '-2px',
+              transition: 'all 0.15s',
+            }}
+          >
+            Cumulative
+          </button>
+          <button
+            onClick={() => setPositionViewMode('detailed')}
+            style={{
+              flex: 1, padding: '7px 0', fontSize: '11px',
+              fontWeight: positionViewMode === 'detailed' ? 700 : 600,
+              border: 'none', borderRadius: 0, cursor: 'pointer',
+              background: 'transparent',
+              color: positionViewMode === 'detailed' ? 'var(--navy, #101828)' : 'var(--text-secondary, #6b7280)',
+              borderBottom: positionViewMode === 'detailed' ? '2.5px solid var(--navy, #101828)' : '2.5px solid transparent',
+              marginBottom: '-2px',
+              transition: 'all 0.15s',
+            }}
+          >
+            Detailed
+          </button>
+        </div>
+
+        {/* Position Rows */}
+        {positionsToRender.map((pos, idx) => {
+          const entryPrice = pos.avg_price || pos.entry_price || 0;
+          const ltp = pos.current_ltp ?? pos.ltp ?? entryPrice;
+          const pnl = pos.unrealised_pnl ?? pos.total_pnl ?? 0;
+          const pnlColor = pnl >= 0 ? 'var(--green, #1db954)' : 'var(--red, #e53935)';
+          const sideBg = pos.side === 'BUY' ? 'var(--green-bg)' : 'var(--red-bg)';
+          const sideClr = pos.side === 'BUY' ? 'var(--green-text)' : 'var(--red-text)';
+          const isExiting = exitingPosIds.current.has(pos.id);
+          // entry time for detailed view
+          const timeStr = pos.entry_time
+            ? new Date(pos.entry_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
+          const tradeCount = pos._count || 1;
+
+          return (
+            <div key={positionViewMode === 'cumulative' ? `${pos.symbol}|${pos.side}|${pos.product_type}` : pos.id} className="position-row">
+              <div className="position-info-row">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '130px' }}>{pos.symbol}</span>
+                    {positionViewMode === 'detailed' && timeStr && (
+                      <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{timeStr}</span>
+                    )}
+                    {positionViewMode === 'cumulative' && tradeCount > 1 && (
+                      <span style={{ fontSize: '9px', background: 'var(--pill-bg, #F1F5F9)', color: 'var(--text-secondary)', padding: '1px 5px', borderRadius: '10px', flexShrink: 0 }}>
+                        {tradeCount} trades
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <span style={{ fontWeight: 700, color: sideClr, fontSize: '10px', background: sideBg, padding: '1px 6px', borderRadius: '4px' }}>
+                      {pos.side}
+                    </span>
+                    <span style={{ color: 'var(--pill-text)', fontSize: '11px' }}>{pos.qty_open} qty</span>
+                    {pos.product_type && (
+                      <span style={{ fontSize: '9px', fontWeight: 600, color: pos.product_type === 'CARRY' ? '#7C3AED' : 'var(--text-muted)', background: pos.product_type === 'CARRY' ? '#EDE9FE' : 'transparent', padding: pos.product_type === 'CARRY' ? '1px 5px' : '0', borderRadius: '4px' }}>
+                        {pos.product_type}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
+                  <div style={{ color: pnlColor, fontWeight: 700, fontSize: '13px' }}>
+                    {fmtPnl(pnl)}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', rowGap: '1px', columnGap: '5px', alignItems: 'center' }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '10px', textAlign: 'right' }}>Avg</span>
+                    <span style={{ color: 'var(--text-primary)', fontSize: '10px', fontWeight: 500 }}>{fmtPrice(entryPrice)}</span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '10px', textAlign: 'right' }}>LTP</span>
+                    <span style={{ color: 'var(--text-primary)', fontSize: '10px', fontWeight: 500 }}>{fmtPrice(ltp)}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="position-actions">
+                <button 
+                  className={`position-action-btn add-position-btn${(isSubmitting && addingPosId !== pos.id) || exitingPosIds.current.size > 0 ? ' submitting-inactive' : ''}`} 
+                  onClick={() => handleAddMorePosition(pos)} 
+                  disabled={isSubmitting || exitingPosIds.current.size > 0}
+                >
+                  {isSubmitting && addingPosId === pos.id && <AnimatedLoader size="small" />}
+                  {isSubmitting && addingPosId === pos.id ? 'Adding...' : '+ Add More'}
+                </button>
+                <button
+                  className={`position-action-btn exit-position-btn${isSubmitting || (exitingPosIds.current.size > 0 && !isExiting) ? ' submitting-inactive' : ''}`}
+                  onClick={() => handleExitPosition(pos)}
+                  disabled={isSubmitting || isExiting || (exitingPosIds.current.size > 0 && !isExiting)}
+                  style={{ 
+                    opacity: (isSubmitting || isExiting || (exitingPosIds.current.size > 0 && !isExiting)) ? 0.5 : 1, 
+                    cursor: (isSubmitting || isExiting || (exitingPosIds.current.size > 0 && !isExiting)) ? 'not-allowed' : 'pointer',
+                    pointerEvents: (isSubmitting || exitingPosIds.current.size > 0) ? 'none' : 'auto'
+                  }}
+                >
+                  {isExiting ? 'Exiting...' : 'Exit'}
+                </button>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', rowGap: '2px', columnGap: '6px', alignItems: 'center' }}>
-              <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>Entry</span>
-              <span style={{ color: 'var(--text-primary)', fontSize: '11px', fontWeight: 500 }}>₹{entryPrice.toFixed(2)}</span>
-              <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>LTP</span>
-              <span style={{ color: 'var(--text-primary)', fontSize: '11px', fontWeight: 500 }}>₹{(pos.current_ltp ?? pos.ltp ?? pos.avg_price ?? pos.entry_price ?? 0).toFixed(2)}</span>
-            </div>
-            <div style={{ color: pnlColor, fontWeight: 700 }}>
-              {pnl >= 0 ? '+' : '-'}₹{Math.abs(pnl).toFixed(2)}
-            </div>
-          </div>
-          <div className="position-actions">
-            <button className="position-action-btn add-position-btn" onClick={() => handleAddMorePosition(pos)}>+ Add More</button>
-            <button className="position-action-btn exit-position-btn" onClick={() => handleExitPosition(pos)}>Exit</button>
-          </div>
-        </div>
-      );
-    });
+          );
+        })}
+      </>
+    );
   };
 
   return (
     <div
-      className={`tc-wrapper ${isPanelExpanded ? 'panel-expanded' : ''}`}
+      className={`tc-wrapper ${isPanelExpanded && !(isLandscape || isCssLandscape) ? 'panel-expanded' : ''}`}
       style={(isLandscape || isCssLandscape) ? {
         position: 'fixed',
         top: 0,
@@ -1575,28 +1861,12 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         overflow: 'hidden',
         transform: isCssLandscape ? 'rotate(90deg) translateY(-100%)' : 'none',
         transformOrigin: isCssLandscape ? 'top left' : 'center',
+        background: 'var(--container-bg, #FFFFFF)',
       } : undefined}
     >
       {/* Top Toolbar */}
       <div className="tc-top-toolbar" onMouseLeave={() => setOpenTopFlyout(null)}>
-        {/* ── Back button ── */}
-        <button
-          className="tc-icon-btn"
-          style={{ marginRight: '-6px' }}
-          onClick={() => {
-            const sheet = document.getElementById('chartSheet');
-            const overlay = document.getElementById('chartSheetOverlay');
-            if (sheet) sheet.classList.remove('open');
-            if (overlay) overlay.classList.remove('active');
-            setTimeout(() => {
-              setIsCssLandscape(false);
-            }, 350);
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M10 3L5 8l5 5" />
-          </svg>
-        </button>
+        {/* ── Back button removed per user request ── */}
 
         {/* ── Symbol ── */}
         {isSearchActive ? (
@@ -1640,12 +1910,10 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
             setIsSearchActive(true);
             setTimeout(() => searchInputRef.current?.focus(), 100);
           }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px', opacity: 0.7 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.85 }}>
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <span className="tc-symbol-name">{symbol.replace('NSE:', '').replace('BSE:', '')}</span>
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style={{ opacity: 0.5 }}><path d="M2 3l3 4 3-4z" /></svg>
           </div>
         )}
 
@@ -1655,14 +1923,18 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         {(() => {
           const intervals: { label: string; tf: Timeframe }[] = [
             { label: '1m', tf: '1m' },
+            { label: '2m', tf: '2m' },
+            { label: '3m', tf: '3m' },
             { label: '5m', tf: '5m' },
+            { label: '10m', tf: '10m' },
             { label: '15m', tf: '15m' },
+            { label: '30m', tf: '30m' },
             { label: '1H', tf: '60m' },
             { label: 'D', tf: 'day' },
           ];
           const current = intervals.find(i => i.tf === timeframe) || intervals[1];
           return (
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
               <div
                 className={`tc-tb-btn ${openTopFlyout === 'interval' ? 'tc-tb-btn-open' : ''}`}
                 onMouseEnter={() => setOpenTopFlyout('interval')}
@@ -1672,6 +1944,36 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
                 <span style={{ fontWeight: 700, fontSize: '13px' }}>{current.label}</span>
                 <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M1 2l3 4 3-4z" /></svg>
               </div>
+              
+              {/* Native React Countdown - Bypasses TradingView entirely */}
+              {(() => {
+                if (timeframe === 'day') return null;
+                const [timeLeft, setTimeLeft] = useState('');
+                useEffect(() => {
+                  const resMs = 
+                    timeframe === '1m' ? 60000 : timeframe === '2m' ? 120000 : timeframe === '3m' ? 180000 :
+                    timeframe === '5m' ? 300000 : timeframe === '10m' ? 600000 : timeframe === '15m' ? 900000 :
+                    timeframe === '30m' ? 1800000 : timeframe === '60m' ? 3600000 : 0;
+                  if (!resMs) return;
+                  const interval = setInterval(() => {
+                    const nowMs = Date.now();
+                    // Anchor to 09:15 for non-crypto 60m candles if needed, but standard modulo works for all intraday
+                    // The modulo handles the standard UTC epoch offsets perfectly for all timeframes <= 60m
+                    const next = Math.ceil(nowMs / resMs) * resMs;
+                    const diff = Math.max(0, next - nowMs);
+                    const m = Math.floor(diff / 60000);
+                    const s = Math.floor((diff % 60000) / 1000);
+                    setTimeLeft(`${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`);
+                  }, 1000);
+                  return () => clearInterval(interval);
+                }, [timeframe]);
+                return timeLeft ? (
+                  <div style={{ marginLeft: '4px', fontSize: '12px', fontWeight: 600, color: '#f23645' }}>
+                    ({timeLeft})
+                  </div>
+                ) : null;
+              })()}
+
               {openTopFlyout === 'interval' && (
                 <div className="tc-top-flyout" style={{ minWidth: '110px' }}>
                   <div className="tc-flyout-title">Interval</div>
@@ -1690,6 +1992,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
             </div>
           );
         })()}
+
+        <div className="tc-divider"></div>
 
         {/* ── Chart Type flyout ── */}
         {(() => {
@@ -1740,18 +2044,36 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         <div
           className="tc-tb-btn tc-tb-indicators"
           title="Indicators"
-          onClick={() => setShowSettingsModal(true)}
-          style={{ display: 'none' }}
+          onClick={() => document.dispatchEvent(new CustomEvent('tv-show-indicators'))}
+        >
+          <span style={{ fontSize: '14px', fontWeight: 700, fontStyle: 'italic' }}>Fx</span>
+        </div>
+
+        <div className="tc-divider"></div>
+
+        {/* ── Tools ── */}
+        <div
+          className="tc-tb-btn tc-tb-indicators"
+          title="Drawing Tools"
+          onClick={() => document.dispatchEvent(new CustomEvent('tv-toggle-drawings'))}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
-            <path d="M1 10 L4 6 L7 8 L10 3 L13 5" />
-            <line x1="1" y1="12" x2="13" y2="12" strokeDasharray="2 1" opacity="0.5" />
+            <path d="M11 2l-7 7-2 4 4-2 7-7-2-2z" />
           </svg>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>Indicators</span>
         </div>
 
         {/* ── Compare ── HIDDEN */}
         {/* ── Snapshot ── HIDDEN */}
+        
+        <div className="tc-divider"></div>
+
+        {/* ── Mobile Rotate Screen (Moved next to tools) ── */}
+        <div className="tc-tb-icon mobile-only" title="Toggle Landscape Layout" onClick={() => setIsCssLandscape(!isCssLandscape)}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: isCssLandscape ? 'rotate(-90deg)' : 'none', transition: 'transform 0.3s ease' }}>
+            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+            <line x1="12" y1="18" x2="12.01" y2="18"></line>
+          </svg>
+        </div>
 
         {/* ── Right side ── */}
         <div className="tc-top-right">
@@ -1764,10 +2086,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
             </svg>
           </div>
 
-
-
           {/* Fullscreen */}
-          <div className="tc-tb-icon" title="Fullscreen" onClick={() => {
+          <div className="tc-tb-icon desktop-only" title="Fullscreen" onClick={() => {
             const el = document.getElementById('chartSheet');
             if (el) el.requestFullscreen?.();
           }}>
@@ -1778,546 +2098,648 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
         </div>
       </div>
 
-      {/* Main Area */}
-      <div className="tc-main-area" style={isLandscape ? { height: 'calc(100dvh - 2.875rem)', flex: 1 } : undefined}>
+      {/* Content Split Container */}
+      <div style={{ display: 'flex', flexDirection: (isLandscape || isCssLandscape) ? 'row' : 'column', flex: 1, overflow: 'hidden' }}>
+
+        {/* Main Area */}
+        <div className="tc-main-area" style={{ flex: 1, minWidth: 0, position: 'relative' }}>
 
 
-        {/* Chart Container */}
-        <div className="tc-chart-container">
-          {/* Rotate Button (Floating) */}
-          <div className="tc-rotate-btn" title={isCssLandscape ? "Rotate to Portrait" : "Rotate to Landscape"} onClick={() => {
-            setIsCssLandscape(!isCssLandscape);
-            setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-            setTimeout(() => window.dispatchEvent(new Event('resize')), 300); // Fail-safe
-          }}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
-              <line x1="12" y1="18" x2="12.01" y2="18"></line>
-              <path d="M22 12h-2M4 12H2"></path>
-            </svg>
-          </div>
+          {/* Chart Container */}
+          <div className="tc-chart-container" style={{ position: 'relative', overflow: 'hidden' }}>
 
-          {/* Legend Overlay */}
-          <div className="tc-legend-overlay">
-            <div className="tc-legend-top">
-              <span className="tc-legend-title">{symbol}</span>
-              <span style={{ color: '#9CA3AF' }}>•</span>
-              <span className="tc-legend-tf">{timeframe.replace('m', '').replace('day', 'D')}</span>
-              <span style={{ color: '#9CA3AF' }}>•</span>
-              <span className="tc-legend-exchange">{displayExchange}</span>
-              <span className="tc-legend-status"></span>
-            </div>
-            {currentPrice > 0 && (
-              <div className="tc-legend-bottom">
-                <span className={`tc-legend-price ${isUp ? 'up' : 'down'}`}>
-                  ₹{currentPrice.toFixed(2)}
-                </span>
-                <span className={`tc-legend-price ${isUp ? 'up' : 'down'}`} style={{ fontSize: '0.8rem', marginLeft: '2px' }}>
-                  {isUp ? '+' : ''}{priceChange.toFixed(2)} ({isUp ? '+' : ''}{priceChangePct.toFixed(2)}%)
-                </span>
+            {/* Floating Rotate Screen Button removed and moved to header */}
+
+            {/* Floating Order Panel Toggle */}
+            {(isLandscape || isCssLandscape) && (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  zIndex: 10,
+                  width: '24px',
+                  height: '56px',
+                  background: 'var(--bg-card, #1E222D)',
+                  border: '1px solid var(--border-color, #2B3139)',
+                  borderRight: 'none',
+                  borderRadius: '6px 0 0 6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '-2px 0 12px rgba(0,0,0,0.2)',
+                  color: 'var(--text-secondary, #787B86)',
+                  transition: 'all 0.2s ease'
+                }}
+                onClick={() => setIsPanelExpanded(!isPanelExpanded)}
+              >
+                <i className={`ti ${isPanelExpanded ? 'ti-chevron-right' : 'ti-chevron-left'}`} style={{ fontSize: '18px' }}></i>
               </div>
             )}
+
+            {/* BUY/price/SELL widget — HIDDEN */}
+
+            <ChartContainer
+              key={`${symbol}-${segment}`}
+              symbol={symbol}
+              segment={segment}
+              timeframe={timeframe}
+              chartType={chartType}
+              candles={historicalCandles}
+              liveQuote={activeLiveQuote}
+              loading={loading}
+              error={error}
+            />
           </div>
-
-          {/* BUY/price/SELL widget — HIDDEN */}
-
-          <ChartContainer
-            key={`${symbol}-${segment}`}
-            symbol={symbol}
-            segment={segment}
-            timeframe={timeframe}
-            chartType={chartType}
-            candles={historicalCandles}
-            liveQuote={activeLiveQuote}
-            loading={loading && !hasLoadedData.current}
-            error={error}
-            activeIndicators={activeIndicators}
-            setActiveIndicators={setActiveIndicators}
-            settings={settings}
-            setSettings={setSettings}
-            showSettingsModal={showSettingsModal}
-            setShowSettingsModal={setShowSettingsModal}
-          />
-
-          {/* Scalp button moved to P&L card — removed from chart overlay */}
         </div>
-      </div>
 
+        <div
+          style={(isLandscape || isCssLandscape) ? {
+            width: isPanelExpanded ? '340px' : '0px',
+            display: isPanelExpanded ? 'flex' : 'none',
+            flexDirection: 'column',
+            justifyContent: 'flex-start',
+            borderLeft: '1px solid var(--border-color, #eaecef)',
+            background: 'var(--surface, #FFFFFF)',
+            zIndex: 10,
+            flexShrink: 0,
+            height: '100%',
+            overflow: 'hidden'
+          } : {
+            display: 'flex',
+            flexDirection: 'column',
+            width: '100%',
+            flexShrink: 0,
+            zIndex: 10
+          }}
+        >
 
+          {/* In landscape mode: push content to bottom ONLY if the info panel is collapsed */}
+          {(isLandscape || isCssLandscape) && isInfoPanelCollapsed && <div style={{ flex: 1 }} />}
 
-      {/* P&L Card — hide when order block, or panel is expanded, or landscape */}
-      {!isOrderBlockVisible && !isPanelExpanded && !isLandscape && (
-        <div className="pnl-card" id="pnlCard">
-          {isTradeOnChartActive ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div className="pnl-toggle-btn" onClick={() => setIsBottomSectionVisible(!isBottomSectionVisible)} style={{ cursor: 'pointer' }}>
-                  <i className={`ti ${isBottomSectionVisible ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
-                </div>
-                <div>
-                  <span className="pnl-text">P/L: </span>
-                  <span className={`pnl-amount ${pnlTotal >= 0 ? 'positive' : 'negative'}`}>
-                    {pnlTotal >= 0 ? '+' : ''}₹{pnlTotal.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button className="trade-btn sell" onClick={() => showToast('Available soon')} style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'transparent', border: '1.5px solid var(--red, #e53935)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-                  <span className="btn-label" style={{ color: 'var(--red, #e53935)', fontSize: '11px', fontWeight: 600 }}>SL</span>
-                </button>
-                <button className="trade-btn buy" onClick={() => showToast('Available soon')} style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'transparent', border: '1.5px solid var(--green, #1db954)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-                  <span className="btn-label" style={{ color: 'var(--green, #1db954)', fontSize: '11px', fontWeight: 600 }}>TP</span>
-                </button>
-                <div className="pnl-toggle-btn" onClick={() => setIsTradeOnChartActive(false)} style={{ background: 'var(--pill-bg, #1a2432)', color: 'var(--text-primary)', cursor: 'pointer', marginLeft: '4px' }}>
-                  <i className="ti ti-x"></i>
-                </div>
-              </div>
-            </>
-          ) : (
-            <>
-              <div>
-                <span className="pnl-text">P/L: </span>
-                <span className={`pnl-amount ${pnlTotal >= 0 ? 'positive' : 'negative'}`}>
-                  {pnlTotal >= 0 ? '+' : ''}₹{pnlTotal.toFixed(2)}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div
-                  title="Scalp"
-                  onClick={() => setIsTradeOnChartActive(true)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    padding: '4px 14px',
-                    borderRadius: '4px',
-                    background: 'var(--green-bg, #e8f5e9)',
-                    color: 'var(--green, #1db954)',
-                    cursor: 'pointer',
-                    border: '1px solid var(--green, #1db954)',
-                  }}
-                >
-                  <span style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap' }}>Scalp</span>
-                </div>
-                <div className="pnl-toggle-btn" onClick={() => setIsBottomSectionVisible(!isBottomSectionVisible)} style={{ cursor: 'pointer' }}>
-                  <i className={`ti ${isBottomSectionVisible ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Bottom Section */}
-      {!isLandscape && (
-        <div className={`bottom-section ${!isBottomSectionVisible ? 'collapsed' : ''}`} id="bottomSection">
-          {/* Trade Buttons — show Exit when position exists for current symbol, else Buy/Sell */}
-          {!isUnderlyingIndex && !isOrderBlockVisible && (
-            currentInstrumentPosition ? (
-              <div className="trade-buttons" id="tradeButtons">
-                {currentInstrumentPosition.side === 'BUY' ? (
-                  <>
-                    <button id="buyButton" className="trade-btn buy" onClick={() => {
-                      if (isPanelExpanded && activeSegment === 'chain') {
-                        handleQuickMarketOrder('BUY');
-                      } else {
-                        setIsPanelExpanded(false);
-                        setIsExitFlow(false);
-                        setIsAddMoreFlow(false);
-                        setExitPositionId(null);
-                        setOrderBlockTitle(symbol);
-                        setPostOrderSegment('main');
-                        setIsOrderBlockVisible(true);
-                        setOrderSide('BUY');
-                      }
-                    }}>
-                      <span className="btn-label">BUY</span>
-                    </button>
-                    <button className="trade-btn exit-position-chart-btn" onClick={() => handleExitPosition(currentInstrumentPosition)}>
-                      <span className="btn-label">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: '6px', verticalAlign: 'middle' }}>
-                          <path d="M10 1l3 3-3 3" /><path d="M13 4H5" /><path d="M7 13H2a1 1 0 01-1-1V2a1 1 0 011-1h5" />
-                        </svg>
-                        EXIT LONG
+          {/* P&L Card */}
+        {!isOrderBlockVisible && (
+          <div className="pnl-card" id="pnlCard" style={(isLandscape || isCssLandscape) && !isInfoPanelCollapsed ? { display: 'none' } : {}}>
+              {isTradeOnChartActive ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="pnl-toggle-btn" onClick={() => setIsBottomSectionVisible(!isBottomSectionVisible)} style={{ cursor: 'pointer' }}>
+                      <i className={`ti ${isBottomSectionVisible ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                    </div>
+                    <div>
+                      <span className="pnl-text">P/L: </span>
+                      <span className={`pnl-amount ${pnlTotal >= 0 ? 'positive' : 'negative'}`}>
+                        {pnlTotal >= 0 ? '+' : ''}₹{pnlTotal.toFixed(2)}
                       </span>
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button className="trade-btn exit-position-chart-btn" onClick={() => handleExitPosition(currentInstrumentPosition)}>
-                      <span className="btn-label">
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: '6px', verticalAlign: 'middle' }}>
-                          <path d="M10 1l3 3-3 3" /><path d="M13 4H5" /><path d="M7 13H2a1 1 0 01-1-1V2a1 1 0 011-1h5" />
-                        </svg>
-                        EXIT SHORT
-                      </span>
-                    </button>
-                    <button id="sellButton" className="trade-btn sell" onClick={() => {
-                      if (isPanelExpanded && activeSegment === 'chain') {
-                        handleQuickMarketOrder('SELL');
-                      } else {
-                        setIsPanelExpanded(false);
-                        setIsExitFlow(false);
-                        setIsAddMoreFlow(false);
-                        setExitPositionId(null);
-                        setOrderBlockTitle(symbol);
-                        setPostOrderSegment('main');
-                        setIsOrderBlockVisible(true);
-                        setOrderSide('SELL');
-                      }
-                    }}>
-                      <span className="btn-label">SELL</span>
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="trade-buttons" id="tradeButtons">
-                <button id="buyButton" className="trade-btn buy" onClick={() => {
-                  if (isPanelExpanded && activeSegment === 'chain') {
-                    handleQuickMarketOrder('BUY');
-                  } else {
-                    setIsPanelExpanded(false);
-                    setIsExitFlow(false);
-                    setIsAddMoreFlow(false);
-                    setExitPositionId(null);
-                    setOrderBlockTitle(symbol);
-                    setPostOrderSegment('main');
-                    setIsOrderBlockVisible(true);
-                    setOrderSide('BUY');
-                  }
-                }}>
-                  <span className="btn-label">BUY</span>
-                </button>
-                <button id="sellButton" className="trade-btn sell" onClick={() => {
-                  if (isPanelExpanded && activeSegment === 'chain') {
-                    handleQuickMarketOrder('SELL');
-                  } else {
-                    setIsPanelExpanded(false);
-                    setIsExitFlow(false);
-                    setIsAddMoreFlow(false);
-                    setExitPositionId(null);
-                    setOrderBlockTitle(symbol);
-                    setPostOrderSegment('main');
-                    setIsOrderBlockVisible(true);
-                    setOrderSide('SELL');
-                  }
-                }}>
-                  <span className="btn-label">SELL</span>
-                </button>
-              </div>
-            )
-          )}
-
-          {/* Order Block */}
-          {isOrderBlockVisible && (
-            <div className="order-block visible" id="orderBlock">
-              <div className="order-block-header">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
-                  <span className="order-block-title" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {(chainContract ? chainContract.name : orderBlockTitle).replace(/NFO[:\s]?/gi, '').trim()}
-                  </span>
-                  <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' }}>
-                    <span style={{
-                      color: orderSide === 'BUY' ? '#1db954' : '#e53935',
-                      background: 'transparent',
-                      padding: '0',
-                      fontWeight: '600',
-                      fontSize: '11px'
-                    }}>
-                      {orderSide === 'BUY' ? 'Ask' : 'Bid'}: ₹{Number(orderSide === 'BUY' ? liveAsk : liveBid).toFixed(2)}
-                    </span>
-                    <span style={{ color: '#8b949e', fontSize: '11px', fontWeight: '500' }}>
-                      LTP: <span style={{ color: 'var(--text-primary)', fontWeight: '700' }}>₹{Number(liveLTP).toFixed(2)}</span>
-                    </span>
-                    {chainContract && chainContract.expiry && (
-                      <span style={{ background: '#F0F2F5', color: '#8B92A8', padding: '1px 5px', borderRadius: '4px', fontSize: '10px', whiteSpace: 'nowrap' }}>
-                        {chainContract.expiry}
-                      </span>
-                    )}
+                    </div>
                   </div>
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button className="trade-btn sell" onClick={() => showToast('Available soon')} style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'transparent', border: '1.5px solid var(--red, #e53935)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                      <span className="btn-label" style={{ color: 'var(--red, #e53935)', fontSize: '11px', fontWeight: 600 }}>SL</span>
+                    </button>
+                    <button className="trade-btn buy" onClick={() => showToast('Available soon')} style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'transparent', border: '1.5px solid var(--green, #1db954)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
+                      <span className="btn-label" style={{ color: 'var(--green, #1db954)', fontSize: '11px', fontWeight: 600 }}>TP</span>
+                    </button>
+                    <div className="pnl-toggle-btn" onClick={() => { setIsTradeOnChartActive(false); localStorage.setItem('isTradeOnChartActive', 'false'); }} style={{ background: 'var(--pill-bg, #1a2432)', color: 'var(--text-primary)', cursor: 'pointer', marginLeft: '4px' }}>
+                      <i className="ti ti-x"></i>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <span className="pnl-text">P/L: </span>
+                    <span className={`pnl-amount ${pnlTotal >= 0 ? 'positive' : 'negative'}`}>
+                      {pnlTotal >= 0 ? '+' : ''}₹{pnlTotal.toFixed(2)}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div
+                      title="Scalp"
+                      onClick={() => {
+                        const nextState = !isTradeOnChartActive;
+                        setIsTradeOnChartActive(nextState);
+                        localStorage.setItem('isTradeOnChartActive', nextState.toString());
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '4px 14px',
+                        borderRadius: '4px',
+                        background: isTradeOnChartActive ? 'var(--green-bg, #e8f5e9)' : 'transparent',
+                        color: 'var(--green, #1db954)',
+                        cursor: 'pointer',
+                        border: '1px solid var(--green, #1db954)',
+                      }}
+                    >
+                      <span style={{ fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap' }}>Scalp</span>
+                    </div>
+                    <div className="pnl-toggle-btn" onClick={() => setIsBottomSectionVisible(!isBottomSectionVisible)} style={{ cursor: 'pointer' }}>
+                      <i className={`ti ${isBottomSectionVisible ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <div
-                    style={{ marginRight: '8px', cursor: 'pointer', background: 'var(--pill-bg, #1a2432)', width: '26px', height: '26px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--green, #1db954)', border: '1.2px solid var(--green, #1db954)' }}
-                    onClick={() => {
-                      const targetSymbol = chainContract ? chainContract.name : orderBlockTitle.replace(/Add More · |Exit · |Modify · /g, '').trim();
-                      setSymbol(targetSymbol);
-                      // Derive the correct display segment so mapSegmentToDbSegment works
-                      if (chainContract) {
-                        const n = chainContract.name.toUpperCase();
-                        const isBse = n.includes('SENSEX') || n.includes('BANKEX');
-                        const isMcx = n.includes('GOLD') || n.includes('SILVER') || n.includes('CRUDEOIL') || n.includes('NATURALGAS') || n.includes('COPPER');
-                        if (isMcx) {
-                          setSegment('MCX - Options');
-                        } else if (isBse) {
-                          setSegment('BSE - Options');
+          {/* Bottom Section */}
+          <div
+            className={`bottom-section ${(!isBottomSectionVisible && !(isLandscape || isCssLandscape)) ? 'collapsed' : ''}`}
+            id="bottomSection"
+            style={(isLandscape || isCssLandscape) ? { display: 'flex', flexDirection: 'column', flex: !isInfoPanelCollapsed ? 1 : undefined, minHeight: !isInfoPanelCollapsed ? 0 : undefined } : {}}
+          >
+            {/* Trade Buttons — show Exit when position exists for current symbol, else Buy/Sell */}
+            {!isUnderlyingIndex && !isOrderBlockVisible && (
+              currentInstrumentPosition ? (
+                <div className="trade-buttons" id="tradeButtons" style={(isLandscape || isCssLandscape) && !isInfoPanelCollapsed ? { display: 'none' } : {}}>
+                  {currentInstrumentPosition.side === 'BUY' ? (
+                    <>
+                      <button 
+                        className={`trade-btn exit-position-chart-btn${(isSubmitting || exitingPosIds.current.size > 0) && !exitingPosIds.current.has(currentInstrumentPosition.id) ? ' submitting-inactive' : ''}`} 
+                        onClick={() => handleExitPosition(currentInstrumentPosition)}
+                        disabled={isSubmitting || exitingPosIds.current.size > 0}
+                        style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !exitingPosIds.current.has(currentInstrumentPosition.id)) ? 0.5 : 1, pointerEvents: 'auto' }}
+                      >
+                        <span className="btn-label">
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: '6px', verticalAlign: 'middle' }}>
+                            <path d="M10 1l3 3-3 3" /><path d="M13 4H5" /><path d="M7 13H2a1 1 0 01-1-1V2a1 1 0 011-1h5" />
+                          </svg>
+                          {exitingPosIds.current.has(currentInstrumentPosition.id) ? 'EXITING...' : 'EXIT LONG'}
+                        </span>
+                      </button>
+                      <button id="buyButton" className={`trade-btn buy${(isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'BUY') ? ' submitting-inactive' : ''}`} disabled={isSubmitting || exitingPosIds.current.size > 0} style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'BUY')) ? 0.5 : 1 }} onClick={() => {
+                        if (isTradeOnChartActive) {
+                          handleQuickMarketOrder('BUY');
                         } else {
+                          if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                          else setIsPanelExpanded(false);
+                          setIsExitFlow(false);
+                          setIsAddMoreFlow(false);
+                          setExitPositionId(null);
+                          setOrderBlockTitle(symbol);
+                          setPostOrderSegment('main');
+                          setIsOrderBlockVisible(true);
+                          setOrderSide('BUY');
+                        }
+                      }}>
+                        <span className="btn-label">
+                          {isSubmitting && !addingPosId && orderSide === 'BUY' && <AnimatedLoader size="small" />}
+                          BUY
+                        </span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button id="sellButton" className={`trade-btn sell${(isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'SELL') ? ' submitting-inactive' : ''}`} disabled={isSubmitting || exitingPosIds.current.size > 0} style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'SELL')) ? 0.5 : 1 }} onClick={() => {
+                        if (isTradeOnChartActive) {
+                          handleQuickMarketOrder('SELL');
+                        } else {
+                          if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                          else setIsPanelExpanded(false);
+                          setIsExitFlow(false);
+                          setIsAddMoreFlow(false);
+                          setExitPositionId(null);
+                          setOrderBlockTitle(symbol);
+                          setPostOrderSegment('main');
+                          setIsOrderBlockVisible(true);
+                          setOrderSide('SELL');
+                        }
+                      }}>
+                        <span className="btn-label">
+                          {isSubmitting && !addingPosId && orderSide === 'SELL' && <AnimatedLoader size="small" />}
+                          SELL
+                        </span>
+                      </button>
+                      <button 
+                        className={`trade-btn exit-position-chart-btn${(isSubmitting || exitingPosIds.current.size > 0) && !exitingPosIds.current.has(currentInstrumentPosition.id) ? ' submitting-inactive' : ''}`} 
+                        onClick={() => handleExitPosition(currentInstrumentPosition)}
+                        disabled={isSubmitting || exitingPosIds.current.size > 0}
+                        style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !exitingPosIds.current.has(currentInstrumentPosition.id)) ? 0.5 : 1, pointerEvents: 'auto' }}
+                      >
+                        <span className="btn-label">
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ marginRight: '6px', verticalAlign: 'middle' }}>
+                            <path d="M10 1l3 3-3 3" /><path d="M13 4H5" /><path d="M7 13H2a1 1 0 01-1-1V2a1 1 0 011-1h5" />
+                          </svg>
+                          {exitingPosIds.current.has(currentInstrumentPosition.id) ? 'EXITING...' : 'EXIT SHORT'}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="trade-buttons" id="tradeButtons" style={(isLandscape || isCssLandscape) && !isInfoPanelCollapsed ? { display: 'none' } : {}}>
+                  <button id="sellButton" className={`trade-btn sell${(isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'SELL') ? ' submitting-inactive' : ''}`} disabled={isSubmitting || exitingPosIds.current.size > 0} style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'SELL')) ? 0.5 : 1 }} onClick={() => {
+                    if (isTradeOnChartActive) {
+                      handleQuickMarketOrder('SELL');
+                    } else {
+                      if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                      else setIsPanelExpanded(false);
+                      setIsExitFlow(false);
+                      setIsAddMoreFlow(false);
+                      setExitPositionId(null);
+                      setOrderBlockTitle(symbol);
+                      setPostOrderSegment('main');
+                      setIsOrderBlockVisible(true);
+                      setOrderSide('SELL');
+                    }
+                  }}>
+                    <span className="btn-label">
+                      {isSubmitting && !addingPosId && orderSide === 'SELL' && <AnimatedLoader size="small" />}
+                      SELL
+                    </span>
+                  </button>
+                  <button id="buyButton" className={`trade-btn buy${(isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'BUY') ? ' submitting-inactive' : ''}`} disabled={isSubmitting || exitingPosIds.current.size > 0} style={{ opacity: ((isSubmitting || exitingPosIds.current.size > 0) && !(isSubmitting && !addingPosId && orderSide === 'BUY')) ? 0.5 : 1 }} onClick={() => {
+                    if (isTradeOnChartActive) {
+                      handleQuickMarketOrder('BUY');
+                    } else {
+                      if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                      else setIsPanelExpanded(false);
+                      setIsExitFlow(false);
+                      setIsAddMoreFlow(false);
+                      setExitPositionId(null);
+                      setOrderBlockTitle(symbol);
+                      setPostOrderSegment('main');
+                      setIsOrderBlockVisible(true);
+                      setOrderSide('BUY');
+                    }
+                  }}>
+                    <span className="btn-label">
+                      {isSubmitting && !addingPosId && orderSide === 'BUY' && <AnimatedLoader size="small" />}
+                      BUY
+                    </span>
+                  </button>
+                </div>
+              )
+            )}
+
+            {/* Order Block */}
+            {isOrderBlockVisible && (
+              <div className="order-block visible" id="orderBlock">
+                <div className="order-block-header">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 }}>
+                    <span className="order-block-title" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {(chainContract ? chainContract.name : orderBlockTitle).replace(/NFO[:\s]?/gi, '').trim()}
+                    </span>
+                    <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' }}>
+                      <span style={{
+                        color: orderSide === 'BUY' ? '#1db954' : '#e53935',
+                        background: 'transparent',
+                        padding: '0',
+                        fontWeight: '600',
+                        fontSize: '11px'
+                      }}>
+                        {orderSide === 'BUY' ? 'Ask' : 'Bid'}: ₹{Number(orderSide === 'BUY' ? liveAsk : liveBid).toFixed(2)}
+                      </span>
+                      <span style={{ color: '#8b949e', fontSize: '11px', fontWeight: '500' }}>
+                        LTP: <span style={{ color: 'var(--text-primary)', fontWeight: '700' }}>₹{Number(liveLTP).toFixed(2)}</span>
+                      </span>
+                      {chainContract && chainContract.expiry && (
+                        <span style={{ background: '#F0F2F5', color: '#8B92A8', padding: '1px 5px', borderRadius: '4px', fontSize: '10px', whiteSpace: 'nowrap' }}>
+                          {chainContract.expiry}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <div
+                      style={{ marginRight: '8px', cursor: 'pointer', background: 'var(--pill-bg, #1a2432)', width: '26px', height: '26px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--green, #1db954)', border: '1.2px solid var(--green, #1db954)' }}
+                      onClick={() => {
+                        const targetSymbol = chainContract ? chainContract.name : orderBlockTitle.replace(/Add More · |Exit · |Modify · /g, '').trim();
+                        
+                        // For exit/add-more flows on options and futures, ensure kite instrument has prefix
+                        // Use the stored addMoreKiteInst if available, else derive from orderBlockTitle/chain
+                        const baseKiteInst = (isAddMoreFlow || isExitFlow) && addMoreKiteInst 
+                          ? addMoreKiteInst 
+                          : (chainContract ? chainContract.name : ((isAddMoreFlow || isExitFlow || modifyOrderId) ? targetSymbol : symbol));
+                          
+                        let kiteInstForOrder = baseKiteInst;
+                        
+                        // Helper to detect if it's MCX
+                        const isMcx = ['GOLD', 'SILVER', 'CRUDE', 'NATGAS', 'NATURALGAS', 'COPPER', 'ZINC', 'ALUMINIUM', 'LEAD'].some(c => (chainContract?.name || targetSymbol).includes(c));
+                        
+                        if (['OPTIDX', 'FUTIDX', 'OPTSTK', 'FUTSTK', 'OPTCOM', 'FUTCOM', 'OPTCUR', 'FUTCUR'].includes(dbSeg)) {
+                          kiteInstForOrder = isMcx ? `MCX:${baseKiteInst}` : `NFO:${baseKiteInst}`;
+                        }
+                        
+                        setSymbol(targetSymbol);
+                        // Derive the correct display segment so mapSegmentToDbSegment works
+                        if (chainContract) {
+                          const n = chainContract.name.toUpperCase();
+                          const isBse = n.includes('SENSEX') || n.includes('BANKEX');
+                          if (isMcx) {
+                            setSegment('MCX - Options');
+                          } else if (isBse) {
+                            setSegment('BSE - Options');
+                          } else {
+                            setSegment('NSE - Options');
+                          }
+                        } else if (targetSymbol.includes('CE') || targetSymbol.includes('PE')) {
                           setSegment('NSE - Options');
                         }
-                      } else if (targetSymbol.includes('CE') || targetSymbol.includes('PE')) {
-                        setSegment('NSE - Options');
-                      }
-                      setIsPanelExpanded(false);
+                        setIsPanelExpanded(false);
+                        setIsOrderBlockVisible(false);
+                        setChainContract(null);
+                      }}
+                      title="Open Chart"
+                    >
+                      <svg viewBox="0 0 24 24" style={{ width: '16px', height: '16px', display: 'block' }}>
+                        <rect x="4" y="16" width="2.5" height="4" rx="0.5" fill="currentColor" />
+                        <rect x="9" y="13" width="2.5" height="7" rx="0.5" fill="currentColor" />
+                        <rect x="14" y="14" width="2.5" height="6" rx="0.5" fill="currentColor" />
+                        <rect x="19" y="11" width="2.5" height="9" rx="0.5" fill="currentColor" />
+                        <path d="M 4 14 L 8 9 L 13 12 L 20 4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        <polyline points="15 4 20 4 20 9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+
+                    <div className="close-order-block" onClick={() => {
                       setIsOrderBlockVisible(false);
                       setChainContract(null);
-                    }}
-                    title="Open Chart"
-                  >
-                    <svg viewBox="0 0 24 24" style={{ width: '16px', height: '16px', display: 'block' }}>
-                      <rect x="4" y="16" width="2.5" height="4" rx="0.5" fill="currentColor" />
-                      <rect x="9" y="13" width="2.5" height="7" rx="0.5" fill="currentColor" />
-                      <rect x="14" y="14" width="2.5" height="6" rx="0.5" fill="currentColor" />
-                      <rect x="19" y="11" width="2.5" height="9" rx="0.5" fill="currentColor" />
-                      <path d="M 4 14 L 8 9 L 13 12 L 20 4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                      <polyline points="15 4 20 4 20 9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </div>
-
-                  <div className="close-order-block" onClick={() => {
-                    setIsOrderBlockVisible(false);
-                    setChainContract(null);
-                    if (isExitFlow || isAddMoreFlow) setIsPanelExpanded(true);
-                    setIsExitFlow(false);
-                    setIsAddMoreFlow(false);
-                    setExitPositionId(null);
-                    setOrderBlockTitle(symbol);
-                  }}>
-                    <i className="ti ti-x"></i>
-                  </div>
-                </div>
-              </div>
-              <div className="order-block-content">
-                {chainContract && (
-                  <div id="chainBSToggle" style={{ display: 'flex', gap: '6px', padding: '0 0 8px' }}>
-                    <button
-                      onClick={() => {
-                        setOrderSide('BUY');
-                        const ask = chainContract.ask;
-                        setLimitPrice(ask.toFixed(2));
-                        setTriggerPrice(ask.toFixed(2));
-                      }}
-                      style={{
-                        flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all .2s', fontFamily: 'Inter,sans-serif', letterSpacing: '0.4px',
-                        background: orderSide === 'BUY' ? '#1db954' : '#F0F2F5', color: orderSide === 'BUY' ? '#fff' : '#8B92A8'
-                      }}
-                    >
-                      BUY
-                    </button>
-                    <button
-                      onClick={() => {
-                        setOrderSide('SELL');
-                        const bid = chainContract.bid;
-                        setLimitPrice(bid.toFixed(2));
-                        setTriggerPrice(bid.toFixed(2));
-                      }}
-                      style={{
-                        flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all .2s', fontFamily: 'Inter,sans-serif', letterSpacing: '0.4px',
-                        background: orderSide === 'SELL' ? '#e53935' : '#F0F2F5', color: orderSide === 'SELL' ? '#fff' : '#8B92A8'
-                      }}
-                    >
-                      SELL
-                    </button>
-                  </div>
-                )}
-
-                {/* chainContractDetail moved to header */}
-
-                <div className="top-row">
-                  <div className="quantity-box">
-                    <div className="qty-controls">
-                      <button className="qty-btn" onClick={() => handleQtyStep(-1)}>−</button>
-                      <input
-                        type="number"
-                        className="qty-value"
-                        value={qtyValue}
-                        step={useLots ? 0.5 : lotSize}
-                        min={useLots ? 0.5 : lotSize}
-                        onChange={(e) => {
-                          setQtyValue(e.target.value);
-                        }}
-                        onBlur={() => {
-                          const val = parseFloat(String(qtyValue));
-                          if (useLots) {
-                            setQtyValue(isNaN(val) || val <= 0 ? 0.5 : val);
-                          } else {
-                            const minVal = isCrypto ? 0.01 : lotSize;
-                            setQtyValue(isNaN(val) || val <= 0 ? minVal : val);
-                          }
-                        }}
-                      />
-                      <button className="qty-btn" onClick={() => handleQtyStep(1)}>+</button>
-                    </div>
-                    <div className="unit-toggle" id="unitSwitch">
-                      <div className={`unit-btn ${!useLots ? 'active' : ''}`} onClick={() => handleUnitChange(false)}>Qty</div>
-                      <div className={`unit-btn ${useLots ? 'active' : ''}`} onClick={() => handleUnitChange(true)}>Lot</div>
+                      if (isExitFlow || isAddMoreFlow) {
+                        setIsPanelExpanded(true);
+                        // Reset qty to 1 lot so stale exit-qty doesn't carry over
+                        // into the next scalp buy/sell tap
+                        setQtyValue(1);
+                        setUseLots(true);
+                      }
+                      setIsExitFlow(false);
+                      setIsAddMoreFlow(false);
+                      setExitPositionId(null);
+                      setOrderBlockTitle(symbol);
+                    }}>
+                      <i className="ti ti-x"></i>
                     </div>
                   </div>
-                  <div className="carry-box" id="carryGroup">
-                    <div className={`carry-option ${orderCarry === 'normal' ? 'active' : ''}`} onClick={() => setOrderCarry('normal')}>Intraday</div>
-                    <div className={`carry-option ${orderCarry === 'carry' ? 'active' : ''}`} onClick={() => setOrderCarry('carry')}>Carry</div>
-                  </div>
                 </div>
-
-                <div className="bottom-row">
-                  <div className="market-limit-box" id="orderTypeGroup" style={{ flex: 6 }}>
-                    <div className={`market-option ${orderType === 'market' ? 'active' : ''}`} onClick={() => setOrderType('market')}>Mkt</div>
-                    <div className={`market-option ${orderType === 'limit' ? 'active' : ''}`} onClick={() => setOrderType('limit')}>{isExitFlow ? 'Tgt' : 'Lmt'}</div>
-                    {!isExitFlow && <div className={`market-option ${orderType === 'slm' ? 'active' : ''}`} onClick={() => setOrderType('slm')}>SLM</div>}
-                    {isExitFlow && <div className={`market-option ${orderType === 'sl' ? 'active' : ''}`} onClick={() => setOrderType('sl')}>SL</div>}
-                    <div className={`market-option ${orderType === 'gtt' ? 'active' : ''}`} onClick={() => setOrderType('gtt')}>GTT</div>
-                  </div>
-                  {(orderType === 'limit' || (orderType === 'gtt' && !isExitFlow)) && (
-                    <div className="limit-price-box visible" id="limitPriceBox" style={{ flex: 4 }}>
-                      <span className="price-symbol">₹</span>
-                      <input
-                        type="number"
-                        step="0.05"
-                        value={limitPrice}
-                        onChange={(e) => setLimitPrice(e.target.value)}
-                        placeholder="price"
-                      />
+                <div className="order-block-content">
+                  {chainContract && (
+                    <div id="chainBSToggle" style={{ display: 'flex', gap: '6px', padding: '0 0 8px' }}>
+                      <button
+                        onClick={() => {
+                          setOrderSide('SELL');
+                          const bid = chainContract.bid;
+                          setLimitPrice(bid.toFixed(2));
+                          setTriggerPrice(bid.toFixed(2));
+                        }}
+                        style={{
+                          flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all .2s', fontFamily: 'Inter,sans-serif', letterSpacing: '0.4px',
+                          background: orderSide === 'SELL' ? '#e53935' : '#F0F2F5', color: orderSide === 'SELL' ? '#fff' : '#8B92A8'
+                        }}
+                      >
+                        SELL
+                      </button>
+                      <button
+                        onClick={() => {
+                          setOrderSide('BUY');
+                          const ask = chainContract.ask;
+                          setLimitPrice(ask.toFixed(2));
+                          setTriggerPrice(ask.toFixed(2));
+                        }}
+                        style={{
+                          flex: 1, padding: '8px', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', transition: 'all .2s', fontFamily: 'Inter,sans-serif', letterSpacing: '0.4px',
+                          background: orderSide === 'BUY' ? '#1db954' : '#F0F2F5', color: orderSide === 'BUY' ? '#fff' : '#8B92A8'
+                        }}
+                      >
+                        BUY
+                      </button>
                     </div>
                   )}
-                  {(orderType === 'sl' || orderType === 'slm') && (
-                    <div className="limit-price-box visible" id="triggerPriceBox" style={{ flex: 4 }}>
-                      <span className="price-symbol" style={{ fontSize: '9px', color: '#8B92A8', fontWeight: 'bold', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Trigger ₹</span>
-                      <input
-                        type="number"
-                        step="0.05"
-                        value={triggerPrice}
-                        onChange={(e) => setTriggerPrice(e.target.value)}
-                        placeholder="trigger"
-                      />
-                    </div>
-                  )}
-                </div>
 
-                {orderType === 'gtt' && (
-                  <div className="gtt-row visible">
-                    <div className="gtt-field sl-field">
-                      <span className="gtt-tag">SL ₹</span>
-                      <input
-                        type="number"
-                        step="0.05"
-                        value={gttSlPrice}
-                        onChange={(e) => setGttSlPrice(e.target.value)}
-                        placeholder="Optional"
-                      />
+                  {/* chainContractDetail moved to header */}
+
+                  <div className="top-row">
+                    <div className="quantity-box">
+                      <div className="qty-controls">
+                        <button className="qty-btn" onClick={() => handleQtyStep(-1)}>−</button>
+                        <input
+                          type="number"
+                          className="qty-value"
+                          value={qtyValue}
+                          step={useLots ? 0.5 : lotSize}
+                          min={useLots ? 0.5 : lotSize}
+                          onChange={(e) => {
+                            setQtyValue(e.target.value);
+                          }}
+                          onBlur={() => {
+                            const val = parseFloat(String(qtyValue));
+                            if (useLots) {
+                              setQtyValue(isNaN(val) || val <= 0 ? 0.5 : val);
+                            } else {
+                              const minVal = isCrypto ? 0.01 : lotSize;
+                              setQtyValue(isNaN(val) || val <= 0 ? minVal : val);
+                            }
+                          }}
+                        />
+                        <button className="qty-btn" onClick={() => handleQtyStep(1)}>+</button>
+                      </div>
+                      <div className="unit-toggle" id="unitSwitch">
+                        <div className={`unit-btn ${!useLots ? 'active' : ''}`} onClick={() => handleUnitChange(false)}>Qty</div>
+                        <div className={`unit-btn ${useLots ? 'active' : ''}`} onClick={() => handleUnitChange(true)}>Lot</div>
+                      </div>
                     </div>
-                    <div className="gtt-field tgt-field">
-                      <span className="gtt-tag">Target ₹</span>
-                      <input
-                        type="number"
-                        step="0.05"
-                        value={gttTargetPrice}
-                        onChange={(e) => setGttTargetPrice(e.target.value)}
-                        placeholder="Optional"
-                      />
+                    <div className="carry-box" id="carryGroup">
+                      <div className={`carry-option ${orderCarry === 'normal' ? 'active' : ''}`} onClick={() => setOrderCarry('normal')}>Intraday</div>
+                      <div className={`carry-option ${orderCarry === 'carry' ? 'active' : ''}`} onClick={() => setOrderCarry('carry')}>Carry</div>
                     </div>
                   </div>
-                )}
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '0 4px', marginBottom: '8px' }}>
-                  <span style={{ color: '#8b949e', fontWeight: 500 }}>Free Margin: <span style={{ color: 'var(--text-primary, #000)', fontWeight: 800 }}>₹{balance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></span>
-                  <span style={{ color: '#8b949e', fontWeight: 500 }}>Required Margin: <span className={`${reqMargin > balance ? 'negative' : ''}`} style={{ color: 'var(--text-primary, #000)', fontWeight: 800 }}>₹{reqMargin.toLocaleString('en-IN')}</span></span>
-                </div>
-                <div className="order-margin-simple" style={{ flexDirection: 'column', gap: '0', alignItems: 'stretch', background: 'var(--pill-bg, rgba(139, 148, 158, 0.1))', border: 'none', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '6px',
-                      width: '100%',
-                      boxSizing: 'border-box'
-                    }}
-                  >
-                    <div
-                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
-                      onClick={() => setShowCharges(!showCharges)}
-                    >
-                      <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>
-                        Charges Breakdown {showCharges ? '▲' : '▼'}
-                      </span>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--green)' }}>
-                        ₹{totalBrokerage.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
+                  <div className="bottom-row">
+                    <div className="market-limit-box" id="orderTypeGroup" style={{ flex: 6 }}>
+                      <div className={`market-option ${orderType === 'market' ? 'active' : ''}`} onClick={() => setOrderType('market')}>Mkt</div>
+                      <div className={`market-option ${orderType === 'limit' ? 'active' : ''}`} onClick={() => setOrderType('limit')}>{isExitFlow ? 'Tgt' : 'Lmt'}</div>
+                      {!isExitFlow && <div className={`market-option ${orderType === 'slm' ? 'active' : ''}`} onClick={() => setOrderType('slm')}>SLM</div>}
+                      {isExitFlow && <div className={`market-option ${orderType === 'sl' ? 'active' : ''}`} onClick={() => setOrderType('sl')}>SL</div>}
+                      <div className={`market-option ${orderType === 'gtt' ? 'active' : ''}`} onClick={() => setOrderType('gtt')}>GTT</div>
                     </div>
-                    {showCharges && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingTop: '2px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
-                          <span style={{ color: 'var(--text-muted)' }}>Intraday Brokerage</span>
-                          <span style={{ color: 'var(--green)', fontWeight: 700 }}>
-                            ₹{intradayCharge.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
-                          <span style={{ color: 'var(--text-muted)' }}>Carry Charges</span>
-                          <span style={{ color: (orderCarry === 'carry' || orderType === 'gtt') ? 'var(--green)' : 'var(--text-muted)', fontWeight: 700 }}>
-                            ₹{(orderCarry === 'carry' || orderType === 'gtt' ? carryCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
-                          <span style={{ color: 'var(--text-muted)' }}>GTT Charges</span>
-                          <span style={{ color: orderType === 'gtt' ? 'var(--green)' : 'var(--text-muted)', fontWeight: 700 }}>
-                            ₹{(orderType === 'gtt' ? gttCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
+                    {(orderType === 'limit' || (orderType === 'gtt' && !isExitFlow)) && (
+                      <div className="limit-price-box visible" id="limitPriceBox" style={{ flex: 4 }}>
+                        <span className="price-symbol">₹</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={limitPrice}
+                          onChange={(e) => setLimitPrice(e.target.value)}
+                          placeholder="price"
+                        />
+                      </div>
+                    )}
+                    {(orderType === 'sl' || orderType === 'slm') && (
+                      <div className="limit-price-box visible" id="triggerPriceBox" style={{ flex: 4 }}>
+                        <span className="price-symbol" style={{ fontSize: '9px', color: '#8B92A8', fontWeight: 'bold', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Trigger ₹</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={triggerPrice}
+                          onChange={(e) => setTriggerPrice(e.target.value)}
+                          placeholder="trigger"
+                        />
                       </div>
                     )}
                   </div>
-                </div>
 
-                <button
-                  className={`submit-btn ${orderSide === 'BUY' ? 'submit-buy' : 'submit-sell'}`}
-                  onClick={handleSubmitOrder}
-                >
-                  {modifyOrderId ? 'Update Order' : `${orderSide} ${useLots ? `${qtyValue} Lot` : `${qtyValue} Qty`}`}
+                  {orderType === 'gtt' && (
+                    <div className="gtt-row visible">
+                      <div className="gtt-field sl-field">
+                        <span className="gtt-tag">SL ₹</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={gttSlPrice}
+                          onChange={(e) => setGttSlPrice(e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="gtt-field tgt-field">
+                        <span className="gtt-tag">Target ₹</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={gttTargetPrice}
+                          onChange={(e) => setGttTargetPrice(e.target.value)}
+                          placeholder="Optional"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', padding: '0 4px', marginBottom: '8px' }}>
+                    <span style={{ color: '#8b949e', fontWeight: 500 }}>Free Margin: <span style={{ color: 'var(--text-primary, #000)', fontWeight: 800 }}>₹{balance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></span>
+                    <span style={{ color: '#8b949e', fontWeight: 500 }}>Required Margin: <span className={`${reqMargin > balance ? 'negative' : ''}`} style={{ color: 'var(--text-primary, #000)', fontWeight: 800 }}>₹{reqMargin.toLocaleString('en-IN')}</span></span>
+                  </div>
+                  <div className="order-margin-simple" style={{ flexDirection: 'column', gap: '0', alignItems: 'stretch', background: 'var(--pill-bg, rgba(139, 148, 158, 0.1))', border: 'none', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                        width: '100%',
+                        boxSizing: 'border-box'
+                      }}
+                    >
+                      <div
+                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
+                        onClick={() => setShowCharges(!showCharges)}
+                      >
+                        <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                          Charges Breakdown {showCharges ? '▲' : '▼'}
+                        </span>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--green)' }}>
+                          ₹{totalBrokerage.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      {showCharges && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingTop: '2px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Intraday Brokerage</span>
+                            <span style={{ color: 'var(--green)', fontWeight: 700 }}>
+                              ₹{intradayCharge.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>Carry Charges</span>
+                            <span style={{ color: (orderCarry === 'carry' || orderType === 'gtt') ? 'var(--green)' : 'var(--text-muted)', fontWeight: 700 }}>
+                              ₹{(orderCarry === 'carry' || orderType === 'gtt' ? carryCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>GTT Charges</span>
+                            <span style={{ color: orderType === 'gtt' ? 'var(--green)' : 'var(--text-muted)', fontWeight: 700 }}>
+                              ₹{(orderType === 'gtt' ? gttCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <button 
+                    className={`submit-btn ${orderSide === 'BUY' ? 'submit-buy' : 'submit-sell'}`} 
+                    disabled={isSubmitting} 
+                    onClick={handlePlaceOrder}
+                  >
+                      {isSubmitting ? <AnimatedLoader size="small" /> : (modifyOrderId ? 'Update Order' : (isExitFlow ? 'Exit Position' : `${orderSide} ${useLots ? (Number(qtyValue) || 1) + ' Lot' : qtyValue}`))}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Segment Row */}
+            <div className="segment-row">
+              <div className="segment-pills">
+                <button className={`segment-pill ${activeSegment === 'chain' ? 'active' : ''}`} onClick={() => {
+                  if (activeSegment === 'chain') {
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                    else if (isPanelExpanded) setIsPanelExpanded(false);
+                  } else {
+                    setActiveSegment('chain');
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(false);
+                    else setIsPanelExpanded(true);
+                    setIsOrderBlockVisible(false);
+                  }
+                }}>
+                  <i className="ti ti-stack-2"></i>Chain
+                </button>
+                <button className={`segment-pill ${activeSegment === 'orders' ? 'active' : ''}`} onClick={() => {
+                  if (activeSegment === 'orders') {
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                    else if (isPanelExpanded) setIsPanelExpanded(false);
+                  } else {
+                    setActiveSegment('orders');
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(false);
+                    else setIsPanelExpanded(true);
+                    setIsOrderBlockVisible(false);
+                  }
+                }}>
+                  <i className="ti ti-list-check"></i>Orders
+                </button>
+                <button className={`segment-pill ${activeSegment === 'positions' ? 'active' : ''}`} onClick={() => {
+                  if (activeSegment === 'positions') {
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(true);
+                    else if (isPanelExpanded) setIsPanelExpanded(false);
+                  } else {
+                    setActiveSegment('positions');
+                    if (isLandscape || isCssLandscape) setIsInfoPanelCollapsed(false);
+                    else setIsPanelExpanded(true);
+                    setIsOrderBlockVisible(false);
+                  }
+                }}>
+                  <i className="ti ti-briefcase"></i>Positions
                 </button>
               </div>
-            </div>
-          )}
-
-          {/* Segment Row */}
-          <div className="segment-row">
-            <div className="segment-pills">
-              <button className={`segment-pill ${activeSegment === 'chain' ? 'active' : ''}`} onClick={() => {
-                if (activeSegment === 'chain' && isPanelExpanded) { setIsPanelExpanded(false); }
-                else { setActiveSegment('chain'); setIsPanelExpanded(true); setIsOrderBlockVisible(false); }
+              <div className="toggle-panel-btn" onClick={() => {
+                if (isLandscape || isCssLandscape) {
+                  setIsInfoPanelCollapsed(!isInfoPanelCollapsed);
+                } else {
+                  setIsPanelExpanded(!isPanelExpanded);
+                  if (!isPanelExpanded) setIsOrderBlockVisible(false);
+                }
               }}>
-                <i className="ti ti-stack-2"></i>Chain
-              </button>
-              <button className={`segment-pill ${activeSegment === 'orders' ? 'active' : ''}`} onClick={() => {
-                if (activeSegment === 'orders' && isPanelExpanded) { setIsPanelExpanded(false); }
-                else { setActiveSegment('orders'); setIsPanelExpanded(true); setIsOrderBlockVisible(false); }
-              }}>
-                <i className="ti ti-list-check"></i>Orders
-              </button>
-              <button className={`segment-pill ${activeSegment === 'positions' ? 'active' : ''}`} onClick={() => {
-                if (activeSegment === 'positions' && isPanelExpanded) { setIsPanelExpanded(false); }
-                else { setActiveSegment('positions'); setIsPanelExpanded(true); setIsOrderBlockVisible(false); }
-              }}>
-                <i className="ti ti-briefcase"></i>Positions
-              </button>
+                <i className={`ti ${((isLandscape || isCssLandscape) ? !isInfoPanelCollapsed : isPanelExpanded) ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
+              </div>
             </div>
-            <div className="toggle-panel-btn" onClick={() => {
-              setIsPanelExpanded(!isPanelExpanded);
-              if (!isPanelExpanded) setIsOrderBlockVisible(false);
-            }}>
-              <i className={`ti ${isPanelExpanded ? 'ti-chevron-up' : 'ti-chevron-down'}`}></i>
-            </div>
-          </div>
 
-          {/* Info Panel */}
-          <div className={`info-panel ${!isPanelExpanded ? 'collapsed' : ''}`} id="infoPanel">
-
-            <div className={`panel-content ${activeSegment === 'chain' ? 'chain-mode' : ''}`}>
-              {renderPanelContent()}
+            <div
+              className={`info-panel ${(!isPanelExpanded && !(isLandscape || isCssLandscape)) ? 'collapsed' : ''}`}
+              id="infoPanel"
+              style={(isLandscape || isCssLandscape) ? { display: isInfoPanelCollapsed ? 'none' : 'flex', flexDirection: 'column', width: '100%', flex: 1, minHeight: 0 } : {}}
+            >
+              <div
+                className={`panel-content ${activeSegment === 'chain' ? 'chain-mode' : ''}`}
+                style={(isLandscape || isCssLandscape) ? { flex: 1, minHeight: 0, maxHeight: 'none' } : {}}
+              >
+                {renderPanelContent()}
+              </div>
             </div>
           </div>
         </div>
-      )}
+        {/* End of Right / Bottom Panel Area */}
+      </div>
+      {/* End of Content Split Container */}
       {toast.visible && (
         <div className={`toast-message toast-show ${toast.isError ? 'neg' : ''}`}>
           {toast.msg}
@@ -2326,4 +2748,5 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     </div>
   );
 }
+
 

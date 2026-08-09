@@ -1,7 +1,8 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import { signOut } from '@/lib/auth';
-import { apiCall, Toast, ToastState, SkeletonCard } from './AdminUtils';
+import { apiCall, Toast, ToastState } from './AdminUtils';
+import AnimatedLoader from '@/components/AnimatedLoader';
 
 export type DashboardMetrics = {
   ledger_balance: number;
@@ -26,65 +27,31 @@ export type DashboardMetrics = {
   conversion: string;
 };
 
-export type MetricsStore = Record<string, string | number>;
+type UserEntry = { id: string; role: string; parent_id: string; full_name?: string; is_active?: boolean };
 
-export const metricsToStore = (m: DashboardMetrics | null): MetricsStore => {
-  if (!m) return {};
-  const fmt = (n: number | null | undefined) => {
-    if (n === null || n === undefined || isNaN(n)) return '0.00';
-    return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-  
-  return {
-    'LEDGER BALANCE': '₹' + fmt(m.ledger_balance),
-    'NET BALANCE': '₹' + fmt(m.net_balance ?? 0),
-    'MARGIN USED': '₹' + fmt(m.margin_used ?? 0),
-    'MARK-TO-MARKET': '₹' + fmt(m.mark_to_market),
-    'NET P&L': '₹' + fmt(m.net_pnl ?? 0),
-    'BROKERAGE': '₹' + fmt(m.total_brokerage ?? 0),
-    'NET': '₹' + fmt(m.net),
-    'TOTAL DEPOSITS': '₹' + fmt(m.total_deposits),
-    'TOTAL WITHDRAWALS': '₹' + fmt(m.total_withdrawals),
-    'AVG DEPOSIT': '₹' + fmt(m.avg_deposit),
-    'AVG WITHDRAWAL': '₹' + fmt(m.avg_withdrawal),
-    'REGISTERED': m.registered || 0,
-    'ADDED FUNDS': m.added_funds || 0,
-    'CONVERSION': m.conversion || '0%',
-    'AVG PROFIT': '₹' + fmt(m.avg_profit),
-    'AVG LOSS': '₹' + fmt(m.avg_loss),
-    'PROFITABLE CLIENTS': m.profitable_clients || 0,
-    'LOSS-MAKING CLIENTS': m.loss_making_clients || 0,
-    'BUY POSITION': m.buy_position_count || 0,
-    'SELL POSITION': m.sell_position_count || 0,
-    'RATIO': (m.sell_position_count ? (m.buy_position_count / m.sell_position_count) : m.buy_position_count).toFixed(2),
-  };
+const fmt = (n: number | null | undefined) => {
+  if (n === null || n === undefined || isNaN(n)) return '0.00';
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-function DashBoardSection({ title, fields, metrics, onFetch, loading }: {
-  title: string;
-  fields: { label: string }[];
-  metrics: MetricsStore;
-  onFetch: () => void;
-  loading: boolean;
-}) {
-  return (
-    <div className="adm-db-section">
-      <div className="adm-db-sec-header">
-        <h3 className="adm-db-sec-title">{title}</h3>
-        <button className="adm-db-refresh" onClick={onFetch} disabled={loading}>
-          <i className={`fas fa-sync-alt ${loading ? 'fa-spin' : ''}`} />
-        </button>
-      </div>
-      <div className="adm-db-grid">
-        {fields.map(f => (
-          <div className="adm-db-card" key={f.label}>
-            <div className="adm-db-label">{f.label}</div>
-            <div className="adm-db-value">{metrics[f.label] ?? '—'}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+const fmtShort = (n: number | null | undefined) => {
+  if (n === null || n === undefined || isNaN(n)) return '₹ 0';
+  return '₹ ' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+};
+
+function getRoleLabel(role: string) {
+  if (role === 'broker') return 'Broker';
+  if (role === 'sub_broker') return 'Sub Broker';
+  if (role === 'admin') return 'Admin';
+  if (role === 'super_admin') return 'Super Admin';
+  return 'Client';
+}
+
+function getRoleTagClass(role: string) {
+  if (role === 'broker') return 'db-role-tag db-role-broker';
+  if (role === 'sub_broker') return 'db-role-tag db-role-subbroker';
+  if (role === 'admin') return 'db-role-tag db-role-admin';
+  return 'db-role-tag db-role-client';
 }
 
 export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMode }: {
@@ -94,19 +61,22 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
 }) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  
   const [brokerId, setBrokerId] = useState('');
   const [subBrokerId, setSubBrokerId] = useState('');
   const [clientId, setClientId] = useState('');
-  const [usersList, setUsersList] = useState<{ id: string; role: string; parent_id: string }[]>([]);
-
+  const [usersList, setUsersList] = useState<UserEntry[]>([]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [excludedUsers, setExcludedUsers] = useState<Set<string>>(new Set());
+  const [collapsedRoles, setCollapsedRoles] = useState<Record<string, boolean>>({});
+  const [lastUpdated, setLastUpdated] = useState('');
 
   useEffect(() => {
     apiCall(`/api/admin/users?demo=${isDemoMode}`, { method: 'GET' }).then(({ ok, data }) => {
-      if (ok) setUsersList(data as { id: string; role: string; parent_id: string }[]);
+      if (ok) setUsersList(data as UserEntry[]);
     });
   }, [isDemoMode]);
 
@@ -117,8 +87,8 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
         if (u) {
           if (u.role === 'broker') { setBrokerId(u.id); setSubBrokerId(''); setClientId(''); }
           else if (u.role === 'sub_broker') { setBrokerId(u.parent_id || ''); setSubBrokerId(u.id); setClientId(''); }
-          else { 
-            setClientId(u.id); 
+          else {
+            setClientId(u.id);
             const parent = usersList.find(x => x.id === u.parent_id);
             if (parent?.role === 'sub_broker') { setSubBrokerId(parent.id); setBrokerId(parent.parent_id || ''); }
             else if (parent?.role === 'broker') { setBrokerId(parent.id); setSubBrokerId(''); }
@@ -139,7 +109,6 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
     if (subBrokerId) params.set('sub_broker_id', subBrokerId);
     if (clientId) params.set('client_id', clientId);
     params.set('demo', String(isDemoMode));
-    
     const query = params.toString() ? `?${params.toString()}` : '';
     apiCall(`/api/admin/dashboard${query}`, { method: 'GET' })
       .then(({ ok, status, data }) => {
@@ -147,7 +116,8 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
         if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
         if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
         setMetrics(data as DashboardMetrics);
-        if (manual) setToast({ message: 'Dashboard updated successfully', type: 'success' });
+        setLastUpdated(new Date().toLocaleTimeString('en-IN'));
+        if (manual) setToast({ message: 'Dashboard updated', type: 'success' });
       })
       .catch((err: unknown) => {
         setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
@@ -157,104 +127,351 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
 
   useEffect(() => {
     setTimeout(() => fetchMetrics(), 0);
-    const interval = setInterval(() => {
-      fetchMetrics(false, true); // silent refresh every second
-    }, 1000);
+    const interval = setInterval(() => fetchMetrics(false, true), 1000);
     return () => clearInterval(interval);
   }, [fetchMetrics]);
-
-  const metricsStore = metricsToStore(metrics);
 
   const brokers = usersList.filter(u => u.role === 'broker');
   const subBrokers = usersList.filter(u => u.role === 'sub_broker' && (!brokerId || u.parent_id === brokerId));
   const clients = usersList.filter(u => (u.role === 'user' || u.role === 'client') && (!subBrokerId ? (!brokerId || u.parent_id === brokerId) : u.parent_id === subBrokerId));
+  const admins = usersList.filter(u => u.role === 'admin');
+
+  // Filtered client list
+  const allUsers = usersList.filter(u => u.role !== 'super_admin');
+  const filteredUsers = allUsers.filter(u => {
+    const matchRole = roleFilter === 'all' || u.role === roleFilter || (roleFilter === 'sub_broker' && u.role === 'sub_broker');
+    const matchSearch = !searchQuery || u.id.toLowerCase().includes(searchQuery.toLowerCase()) || (u.full_name || '').toLowerCase().includes(searchQuery.toLowerCase());
+    return matchRole && matchSearch;
+  });
+
+  // Role groups for ledger summary
+  const roleGroups = [
+    { key: 'admin', label: 'Admin', users: admins },
+    { key: 'broker', label: 'Broker', users: brokers },
+    { key: 'sub_broker', label: 'Sub Broker', users: usersList.filter(u => u.role === 'sub_broker') },
+  ];
+
+  const toggleRole = (key: string) => {
+    setCollapsedRoles(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const toggleExclude = (userId: string) => {
+    setExcludedUsers(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId); else next.add(userId);
+      return next;
+    });
+  };
+
+  const excludeAll = () => setExcludedUsers(new Set(allUsers.map(u => u.id)));
+  const includeAll = () => setExcludedUsers(new Set());
+
+  const m2m = metrics?.mark_to_market ?? 0;
+  const netPnl = metrics?.net_pnl ?? 0;
+  const ledger = metrics?.ledger_balance ?? 0;
+  const totalDeposits = metrics?.total_deposits ?? 0;
+  const totalWithdrawals = metrics?.total_withdrawals ?? 0;
+
+  const roleCounts: Record<string, number> = {
+    all: allUsers.length,
+    broker: brokers.length,
+    sub_broker: usersList.filter(u => u.role === 'sub_broker').length,
+    admin: admins.length,
+    client: usersList.filter(u => u.role === 'user' || u.role === 'client').length,
+  };
 
   return (
-    <div className="adm-db-root">
+    <div className="db-root">
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-      <div className="adm-db-top-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <div className="adm-db-username" style={{ margin: 0 }}>
-            <i className="fas fa-chart-line" style={{ marginRight: 8, opacity: 0.7 }} />
-            Platform Dashboard
-          </div>
-          <div className="adm-db-filter-row">
-            <span className="adm-db-filter-label">Date:</span>
-            <div className="adm-db-date-group">
-              <input type="date" className="adm-db-date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-              <span className="adm-db-filter-dash">–</span>
-              <input type="date" className="adm-db-date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+
+      {/* Header */}
+      <div className="db-header">
+        <div className="db-header-left">
+          <h1 className="db-title">Dashboard</h1>
+          {isDemoMode && <span className="db-demo-badge">DEMO</span>}
+        </div>
+        <div className="db-header-right">
+          <div className="db-date-group">
+            <span className="db-date-label">DATE RANGE</span>
+            <div className="db-date-pair">
+              <input type="date" className="db-date-input" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <span className="db-date-sep">to</span>
+              <input type="date" className="db-date-input" value={dateTo} onChange={e => setDateTo(e.target.value)} />
             </div>
           </div>
-        </div>
-        
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <select className="adm-db-date" style={{ flex: 1, minWidth: 150 }} value={brokerId} onChange={e => { setBrokerId(e.target.value); setSubBrokerId(''); setClientId(''); }}>
-            <option value="">All Brokers</option>
-            {brokers.map(b => <option key={b.id} value={b.id}>{b.id}</option>)}
-          </select>
-          <select className="adm-db-date" style={{ flex: 1, minWidth: 150 }} value={subBrokerId} onChange={e => { setSubBrokerId(e.target.value); setClientId(''); }}>
-            <option value="">All Sub-Brokers</option>
-            {subBrokers.map(b => <option key={b.id} value={b.id}>{b.id}</option>)}
-          </select>
-          <select className="adm-db-date" style={{ flex: 1, minWidth: 150 }} value={clientId} onChange={e => setClientId(e.target.value)}>
-            <option value="">All Clients</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.id}</option>)}
-          </select>
-          <button className="adm-db-refresh" onClick={() => { setBrokerId(''); setSubBrokerId(''); setClientId(''); }} style={{ padding: '0 12px', borderRadius: 6 }} title="Clear Filters">
-            <i className="fas fa-times" />
+          <button className="db-apply-btn" onClick={() => fetchMetrics(true)} disabled={loading}>
+            {loading ? <AnimatedLoader size="small" /> : 'Apply'}
+          </button>
+          <button className="db-clear-btn" onClick={() => { setDateFrom(''); setDateTo(''); setBrokerId(''); setSubBrokerId(''); setClientId(''); }} title="Clear filters">
+            Clear
           </button>
         </div>
       </div>
 
-      <DashBoardSection key="bal" metrics={metricsStore} title="BALANCE INFO" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-        { label: 'LEDGER BALANCE' },
-        { label: 'NET BALANCE' },
-        { label: 'MARGIN USED' },
-      ]} />
+      {/* Filter Dropdowns */}
+      <div className="db-filter-row">
+        <select className="db-select" value={brokerId} onChange={e => { setBrokerId(e.target.value); setSubBrokerId(''); setClientId(''); }}>
+          <option value="">All Brokers</option>
+          {brokers.map(b => <option key={b.id} value={b.id}>{b.full_name || b.id}</option>)}
+        </select>
+        <select className="db-select" value={subBrokerId} onChange={e => { setSubBrokerId(e.target.value); setClientId(''); }}>
+          <option value="">All Sub-Brokers</option>
+          {subBrokers.map(b => <option key={b.id} value={b.id}>{b.full_name || b.id}</option>)}
+        </select>
+        <select className="db-select" value={clientId} onChange={e => setClientId(e.target.value)}>
+          <option value="">All Clients</option>
+          {clients.map(c => <option key={c.id} value={c.id}>{c.full_name || c.id}</option>)}
+        </select>
+      </div>
 
-      {loading && !metrics ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <SkeletonCard key={i} rows={4} />
+      {/* Summary Result Cards */}
+      <div className="db-summary-cards">
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Ledger Total</span>
+          <span className="db-summary-card-value db-blue">₹{fmt(ledger)}</span>
+        </div>
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Net Deposits</span>
+          <span className="db-summary-card-value db-green">₹{fmt(totalDeposits)}</span>
+        </div>
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Net Withdrawals</span>
+          <span className="db-summary-card-value db-red">₹{fmt(totalWithdrawals)}</span>
+        </div>
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Mark-to-Market</span>
+          <span className={`db-summary-card-value ${m2m >= 0 ? 'db-green' : 'db-red'}`}>{m2m >= 0 ? '+' : ''}₹{fmt(m2m)}</span>
+        </div>
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Net P&L</span>
+          <span className={`db-summary-card-value ${netPnl >= 0 ? 'db-green' : 'db-red'}`}>{netPnl >= 0 ? '+' : ''}₹{fmt(netPnl)}</span>
+        </div>
+        <div className="db-summary-card">
+          <span className="db-summary-card-label">Total Brokerage</span>
+          <span className="db-summary-card-value db-dark">₹{fmt(metrics?.total_brokerage ?? 0)}</span>
+        </div>
+      </div>
+
+      {/* Exclusion Controls */}
+      <div className="db-control-box">
+        <div className="db-control-box-header">
+          Exclusion Controls
+          <span className="db-badge-count">{excludedUsers.size} excluded</span>
+        </div>
+        <div className="db-exclusion-pills">
+          {allUsers.slice(0, 20).map(u => (
+            <button
+              key={u.id}
+              className={`db-exclusion-pill${excludedUsers.has(u.id) ? ' excluded' : ''}`}
+              onClick={() => toggleExclude(u.id)}
+            >
+              <span className={`db-pill-dot ${excludedUsers.has(u.id) ? 'excluded' : 'included'}`} />
+              {u.full_name || u.id}
+            </button>
           ))}
         </div>
-      ) : (<>
-        <DashBoardSection key="pnl_overall" metrics={metricsStore} title="OVERALL P&L" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-          { label: 'MARK-TO-MARKET' },
-          { label: 'BROKERAGE' },
-          { label: 'NET P&L' },
-        ]} />
+        <div className="db-exclusion-actions">
+          <button className="db-action-btn" onClick={excludeAll}>Exclude All</button>
+          <button className="db-action-btn" onClick={includeAll}>Include All</button>
+          <span className="db-exclusion-status">
+            <span className="db-exclusion-count">{excludedUsers.size}</span> users excluded
+          </span>
+        </div>
+      </div>
 
-        <DashBoardSection key="dep" metrics={metricsStore} title="DEPOSITS & WITHDRAWALS" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-          { label: 'NET' },
-          { label: 'TOTAL DEPOSITS' },
-          { label: 'TOTAL WITHDRAWALS' },
-          { label: 'AVG DEPOSIT' },
-          { label: 'AVG WITHDRAWAL' },
-        ]} />
+      {/* Main Two-Column Panel */}
+      <div className="db-main-row">
 
-        <DashBoardSection key="reg" metrics={metricsStore} title="CLIENT REGISTRATION" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-          { label: 'REGISTERED' },
-          { label: 'ADDED FUNDS' },
-          { label: 'CONVERSION' },
-        ]} />
+        {/* LEFT: Ledger Summary */}
+        <div className="db-panel">
+          <div className="db-panel-header">
+            <h2 className="db-panel-title">Ledger Summary</h2>
+            <span className="db-live-badge">live</span>
+          </div>
 
-        <DashBoardSection key="pnl_client" metrics={metricsStore} title="CLIENT PROFIT & LOSS" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-          { label: 'AVG PROFIT' },
-          { label: 'AVG LOSS' },
-          { label: 'PROFITABLE CLIENTS' },
-          { label: 'LOSS-MAKING CLIENTS' },
-        ]} />
+          {loading && !metrics ? (
+            <div className="db-loading-wrap">
+              <AnimatedLoader size="small" />
+            </div>
+          ) : (
+            <>
+              {roleGroups.map(group => (
+                <div key={group.key} className="db-role-section">
+                  <div className="db-role-header" onClick={() => toggleRole(group.key)}>
+                    <span className="db-role-label">
+                      {group.label}
+                      <span className="db-count-badge">{group.users.length}</span>
+                    </span>
+                    <span className="db-role-summary">
+                      <span className="db-ledger-amount">{fmtShort(ledger / Math.max(roleGroups.length, 1))}</span>
+                      <span className={`db-toggle-icon${collapsedRoles[group.key] ? '' : ' expanded'}`}>▾</span>
+                    </span>
+                  </div>
+                  {!collapsedRoles[group.key] && (
+                    <div className="db-role-children">
+                      {group.users.length === 0 ? (
+                        <div className="db-no-results">No {group.label}s found</div>
+                      ) : group.users.map(u => (
+                        <div key={u.id} className={`db-child-item${excludedUsers.has(u.id) ? ' excluded' : ''}`}>
+                          <div className="db-child-main">
+                            <span className="db-child-name">
+                              {u.full_name || u.id}
+                              <span className="db-client-id-tag">#{u.id.slice(0, 8)}</span>
+                            </span>
+                            <span className="db-child-ledger">{fmtShort(0)}</span>
+                            <span className="db-child-actions">
+                              <span className={`db-status-dot${u.is_active !== false ? ' active' : ' inactive'}`} />
+                              <button
+                                className="db-exclude-mini-btn"
+                                onClick={() => toggleExclude(u.id)}
+                                title={excludedUsers.has(u.id) ? 'Include' : 'Exclude'}
+                              >
+                                {excludedUsers.has(u.id) ? 'Include' : 'Exclude'}
+                              </button>
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
 
-        <DashBoardSection key="pos" metrics={metricsStore} title="POSITION DETAILS" onFetch={() => fetchMetrics(true)} loading={loading} fields={[
-          { label: 'BUY POSITION' },
-          { label: 'SELL POSITION' },
-          { label: 'RATIO' },
-        ]} />
-      </>)}
+              <div className="db-summary-total">
+                <span>Total Ledger (All Roles)</span>
+                <span>₹{fmt(ledger)}</span>
+              </div>
+              <div className="db-summary-footer">
+                <span>Click role to expand / collapse</span>
+                {lastUpdated && <span>Updated: {lastUpdated}</span>}
+              </div>
+            </>
+          )}
+        </div>
 
-      <div style={{ height: 24 }} />
+        {/* RIGHT: Client List */}
+        <div className="db-panel">
+          <div className="db-panel-header">
+            <h2 className="db-panel-title">Client List</h2>
+            <span className="db-live-badge">live</span>
+          </div>
+
+          {/* Role filter buttons */}
+          <div className="db-filter-section">
+            <span className="db-filter-label">Role:</span>
+            <div className="db-filter-btn-group">
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'broker', label: 'Broker' },
+                { key: 'admin', label: 'Admin' },
+                { key: 'sub_broker', label: 'Sub Broker' },
+                { key: 'client', label: 'Client' },
+              ].map(f => (
+                <button
+                  key={f.key}
+                  className={`db-filter-btn${roleFilter === f.key ? ' active' : ''}`}
+                  onClick={() => setRoleFilter(f.key)}
+                >
+                  {f.label} <span className="db-filter-count">{roleCounts[f.key] ?? 0}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Search */}
+          <div className="db-search-bar">
+            <i className="fas fa-search db-search-icon" />
+            <input
+              type="text"
+              className="db-search-input"
+              placeholder="Search by name or User ID..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button className="db-search-clear" onClick={() => setSearchQuery('')}>✕</button>
+            )}
+          </div>
+
+          {/* Table */}
+          <div className="db-table-wrap">
+            <table className="db-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="db-no-results-cell">No users found</td>
+                  </tr>
+                ) : filteredUsers.map(u => (
+                  <tr key={u.id} className={excludedUsers.has(u.id) ? 'db-excluded-row' : ''}>
+                    <td className="db-user-id-cell">{u.id.slice(0, 12)}</td>
+                    <td>{u.full_name || u.id}</td>
+                    <td><span className={getRoleTagClass(u.role)}>{getRoleLabel(u.role)}</span></td>
+                    <td>
+                      <span className={`db-status-dot${u.is_active !== false ? ' active' : ' inactive'}`} />
+                      <span className={`db-status-label${u.is_active !== false ? ' active' : ' inactive'}`}>
+                        {u.is_active !== false ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="db-table-footer">
+            Showing <strong>{filteredUsers.length}</strong> users
+          </div>
+        </div>
+      </div>
+
+      {/* Performance Stats Row */}
+      <div className="db-stats-row">
+        <div className="db-stat-card">
+          <span className="db-stat-label">Profitable Clients</span>
+          <span className="db-stat-value db-green">{metrics?.profitable_clients ?? 0}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Loss-Making Clients</span>
+          <span className="db-stat-value db-red">{metrics?.loss_making_clients ?? 0}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Buy Positions</span>
+          <span className="db-stat-value db-green">{metrics?.buy_position_count ?? 0}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Sell Positions</span>
+          <span className="db-stat-value db-red">{metrics?.sell_position_count ?? 0}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Avg. Profit</span>
+          <span className="db-stat-value db-green">₹{fmt(metrics?.avg_profit ?? 0)}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Avg. Loss</span>
+          <span className="db-stat-value db-red">₹{fmt(metrics?.avg_loss ?? 0)}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Margin Used</span>
+          <span className="db-stat-value db-dark">₹{fmt(metrics?.margin_used ?? 0)}</span>
+        </div>
+        <div className="db-stat-card">
+          <span className="db-stat-label">Conversion Rate</span>
+          <span className="db-stat-value db-dark">{metrics?.conversion ?? '0%'}</span>
+        </div>
+      </div>
+
+      <div className="db-footer-note">
+        All values in INR · Ledger = Net Deposits − Net Withdrawals
+        {lastUpdated && <> · Updated {lastUpdated}</>}
+      </div>
     </div>
   );
 }

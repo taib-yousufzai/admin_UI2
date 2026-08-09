@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminClient, getUserFromRequest } from '@/lib/adminClient';
 import { getSharedKiteSession } from '@/lib/kiteSession';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 
 /**
  * Fetch LTPs for a mixed batch of instruments (Kite + Binance crypto).
@@ -42,7 +42,7 @@ async function fetchLtpBatch(
   try {
     const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : 'http://localhost:8080');
     const params = new URLSearchParams({ symbols: Array.from(missing).join(',') });
-    const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store' });
+    const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(100) });
     if (resTicker.ok) {
       const json = await resTicker.json();
       if (json.success && json.data) {
@@ -71,9 +71,11 @@ async function fetchLtpBatch(
         missingKite.forEach(i => params.append('i', i));
         const res = await fetch(`https://api.kite.trade/quote?${params}`, {
           headers: { 'X-Kite-Version': '3', Authorization: `token ${apiKey}:${session.accessToken}` },
-          cache: 'no-store',
+          cache: 'no-store', signal: AbortSignal.timeout(100),
         });
-        if (res.ok) {
+        
+        
+        if (res && res.ok) {
           const data = await res.json() as { data?: Record<string, { last_price: number }> };
           for (const inst of missingKite) {
             const quote = data.data?.[inst];
@@ -91,7 +93,7 @@ async function fetchLtpBatch(
   if (missingCrypto.length > 0) {
     await Promise.all(missingCrypto.map(async (sym) => {
       try {
-        const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store' });
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store', signal: AbortSignal.timeout(100) });
         if (res.ok) {
           const data = await res.json();
           if (data.price) { quotesMap[sym] = parseFloat(data.price); missing.delete(sym); }
@@ -202,84 +204,87 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       Array.from(cryptoSymbolsToFetch)
     );
 
-    // 4. Process closing for each position sequentially to avoid DB deadlocks
-    const results = [];
+    // 4. Process closings sequentially to avoid database deadlocks.
+    // All positions belong to the same user so they compete for locks on the
+    // same wallet row. Running them in parallel causes deadlock storms.
+    const results: any[] = [];
+
     for (const { pos, lookupKey } of posSymbols) {
-        try {
-          // Check market hours
-          const symbol = pos.symbol || '';
-          const dbSegment = pos.settlement || '';
-          const exchangeName = symbol.includes(':') ? symbol.split(':')[0] : 'NSE';
-          const ex = exchangeName.toUpperCase();
-          const segUpper = dbSegment.toUpperCase();
+      try {
+        // Check market hours
+        const symbol = pos.symbol || '';
+        const dbSegment = pos.settlement || '';
+        const exchangeName = symbol.includes(':') ? symbol.split(':')[0] : 'NSE';
+        const ex = exchangeName.toUpperCase();
+        const segUpper = dbSegment.toUpperCase();
 
-          if (!segUpper.includes('CRYPTO')) {
-            let segmentId = 'nse';
-            if (ex === 'MCX' || segUpper.includes('MCX')) segmentId = 'mcx';
-            else if (ex === 'BSE' || segUpper.includes('BSE') || segUpper.includes('BFO')) segmentId = 'bse';
-            else if (ex === 'CDS' || ex === 'FOREX' || segUpper.includes('CDS') || segUpper.includes('FOREX')) segmentId = 'forex';
-            else if (ex === 'COMEX' || segUpper.includes('COMEX')) segmentId = 'comex';
+        if (!segUpper.includes('CRYPTO')) {
+          let segmentId = 'nse';
+          if (ex === 'MCX' || segUpper.includes('MCX')) segmentId = 'mcx';
+          else if (ex === 'BSE' || segUpper.includes('BSE') || segUpper.includes('BFO')) segmentId = 'bse';
+          else if (ex === 'CDS' || ex === 'FOREX' || segUpper.includes('CDS') || segUpper.includes('FOREX')) segmentId = 'forex';
+          else if (ex === 'COMEX' || segUpper.includes('COMEX')) segmentId = 'comex';
 
-            const segmentHour = tradingHoursMap.get(segmentId);
-            if (segmentHour) {
-              if (!segmentHour.is_active) {
-                results.push({ positionId: pos.id, success: false, error: 'market is closed' });
-                continue;
-              }
+          const segmentHour = tradingHoursMap.get(segmentId);
+          if (segmentHour) {
+            if (!segmentHour.is_active) {
+              results.push({ positionId: pos.id, success: false, error: 'market is closed' });
+              continue;
+            }
 
-              const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-              const dayOfWeek = nowIST.getDay();
-              const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+            const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
 
-              if (isWeekend) {
-                results.push({ positionId: pos.id, success: false, error: 'market is closed' });
-                continue;
-              }
 
-              const currentHHMM = `${String(nowIST.getHours()).padStart(2, '0')}:${String(nowIST.getMinutes()).padStart(2, '0')}`;
-              if (currentHHMM < segmentHour.start_time || currentHHMM >= segmentHour.end_time) {
-                results.push({ positionId: pos.id, success: false, error: 'market is closed' });
-                continue;
-              }
+            const currentHHMM = `${String(nowIST.getHours()).padStart(2, '0')}:${String(nowIST.getMinutes()).padStart(2, '0')}`;
+            if (currentHHMM < segmentHour.start_time || currentHHMM >= segmentHour.end_time) {
+              results.push({ positionId: pos.id, success: false, error: 'market is closed' });
+              continue;
             }
           }
+        }
 
-          // Get settings and LTP
-          const segSetting = segSettingsMap.get(`${pos.settlement ?? ''}|${pos.side}`);
-          // exit_buffer is stored as a percentage in the DB (e.g. 0.17 = 0.17%), divide by 100
-          const exitBuffer = (segSetting?.exit_buffer ?? 0.17) / 100;
-          const profitHoldSec = segSetting?.profit_hold_sec ?? 120;
-          const lossHoldSec = segSetting?.loss_hold_sec ?? 0;
+        // Get settings and LTP
+        const segSetting = segSettingsMap.get(`${pos.settlement ?? ''}|${pos.side}`);
+        // exit_buffer is stored as a percentage in the DB (e.g. 0.17 = 0.17%), divide by 100
+        const exitBuffer = (segSetting?.exit_buffer ?? 0.17) / 100;
+        const profitHoldSec = segSetting?.profit_hold_sec ?? 120;
+        const lossHoldSec = segSetting?.loss_hold_sec ?? 0;
 
-          const baseLtp = quotesMap[lookupKey] ?? Number(pos.ltp ?? pos.entry_price);
+        const baseLtp = quotesMap[lookupKey];
+        if (!baseLtp || baseLtp <= 0) {
+          results.push({ positionId: pos.id, success: false, error: 'Failed to fetch live market price' });
+          continue;
+        }
 
-          // Exit price computation
-          let exitPrice: number;
-          if (pos.side === 'BUY') {
-            exitPrice = baseLtp * (1 - exitBuffer);
-          } else {
-            exitPrice = baseLtp * (1 + exitBuffer);
-          }
-          exitPrice = Math.round(exitPrice * 100) / 100;
+        // Exit price computation
+        let exitPrice: number;
+        if (pos.side === 'BUY') {
+          exitPrice = baseLtp * (1 - exitBuffer);
+        } else {
+          exitPrice = baseLtp * (1 + exitBuffer);
+        }
+        exitPrice = Math.round(exitPrice * 100) / 100;
 
-          const pnlValue = pos.side === 'BUY'
-            ? (baseLtp - Number(pos.entry_price)) * Number(pos.qty_open)
-            : (Number(pos.entry_price) - baseLtp) * Number(pos.qty_open);
+        const pnlValue = pos.side === 'BUY'
+          ? (baseLtp - Number(pos.entry_price)) * Number(pos.qty_open)
+          : (Number(pos.entry_price) - baseLtp) * Number(pos.qty_open);
 
-          const durationSec = Math.floor((Date.now() - new Date(pos.entry_time).getTime()) / 1000);
-          const requiredHold = pnlValue > 0 ? profitHoldSec : lossHoldSec;
+        const durationSec = Math.floor((Date.now() - new Date(pos.entry_time).getTime()) / 1000);
+        const requiredHold = pnlValue > 0 ? profitHoldSec : lossHoldSec;
 
-          if (durationSec < requiredHold) {
-            results.push({
-              positionId: pos.id,
-              success: false,
-              error: `Anti-Scalping: Minimum hold time of ${requiredHold}s required. Elapsed: ${durationSec}s.`
-            });
-            continue;
-          }
+        if (durationSec < requiredHold) {
+          results.push({
+            positionId: pos.id,
+            success: false,
+            error: `Anti-Scalping: Minimum hold time of ${requiredHold}s required. Elapsed: ${durationSec}s.`
+          });
+          continue;
+        }
 
-          // --- CARRY BROKERAGE (deferred from entry to exit) ---
-          const carryBrokerage = calculateCarryBrokerage({
+        // --- CARRY BROKERAGE (deferred from entry to exit) ---
+        let carryBrokerage = 0;
+        if (!pos.carry_brokerage_paid) {
+          carryBrokerage = calculateCarryBrokerage({
             productType: pos.product_type,
             qty: Number(pos.qty_open),
             entryPrice: Number(pos.entry_price),
@@ -289,46 +294,45 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             commissionType: segSetting?.commission_type,
             commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
           });
-
-          // Call RPC with retry logic for deadlocks
-          let pnl: any;
-          let rpcErr: any;
-          
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            const result = await admin.rpc('close_position', {
-              p_position_id: pos.id,
-              p_user_id:     user.id,
-              p_ltp:         baseLtp,
-              p_exit_price:  exitPrice,
-              p_closed_by:   'USER_ACTION',
-              p_brokerage:   carryBrokerage,
-            });
-            
-            pnl = result.data;
-            rpcErr = result.error;
-            
-            // Postgres deadlock error code is often 40P01, but the message will contain "deadlock"
-            if (rpcErr && rpcErr.message && rpcErr.message.toLowerCase().includes('deadlock')) {
-              console.warn(`[POST /api/positions/close] Deadlock detected on attempt ${attempt} for position ${pos.id}. Retrying...`);
-              if (attempt < 3) {
-                // Exponential backoff
-                await new Promise(resolve => setTimeout(resolve, 200 * attempt));
-                continue;
-              }
-            }
-            break; // Success or non-deadlock error, break the loop
-          }
-
-          if (rpcErr) {
-            console.error(`[POST /api/positions/close] RPC error for position ${pos.id}:`, rpcErr);
-            results.push({ positionId: pos.id, success: false, error: `RPC Error: ${rpcErr.message || JSON.stringify(rpcErr)}` });
-            continue;
-          }
-
-          results.push({ positionId: pos.id, success: true, pnl: Number(pnl), exit_price: exitPrice });
-        } catch (innerErr: any) {
-          results.push({ positionId: pos.id, success: false, error: innerErr.message || 'Unknown error' });
         }
+
+        // Call RPC — sequential execution eliminates deadlocks, but keep one
+        // retry just in case an external process touches the same row.
+        let pnl: any;
+        let rpcErr: any;
+        
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const result = await admin.rpc('close_position_v2', {
+            p_position_id:        pos.id,
+            p_close_qty:          Number(pos.qty_open),
+            p_close_price:        exitPrice,
+            p_closed_by:          'USER',
+            p_expected_brokerage: carryBrokerage,
+          });
+          
+          pnl = result.data;
+          rpcErr = result.error;
+          
+          if (rpcErr && rpcErr.message && rpcErr.message.toLowerCase().includes('deadlock')) {
+            console.warn(`[POST /api/positions/close] Deadlock on attempt ${attempt} for position ${pos.id}. Retrying...`);
+            if (attempt < 2) {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              continue;
+            }
+          }
+          break;
+        }
+
+        if (rpcErr) {
+          console.error(`[POST /api/positions/close] RPC error for position ${pos.id}:`, rpcErr);
+          results.push({ positionId: pos.id, success: false, error: `RPC Error: ${rpcErr.message || JSON.stringify(rpcErr)}` });
+          continue;
+        }
+
+        results.push({ positionId: pos.id, success: true, pnl: Number(pnl), exit_price: exitPrice });
+      } catch (innerErr: any) {
+        results.push({ positionId: pos.id, success: false, error: innerErr.message || 'Unknown error' });
+      }
     }
 
     return NextResponse.json({ success: true, results }, { status: 200 });
@@ -337,3 +341,5 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }
+
+

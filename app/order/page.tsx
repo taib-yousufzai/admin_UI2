@@ -1,14 +1,15 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useMyOrders } from '@/hooks/useMyOrders';
 import { useKitePositions } from '@/hooks/useKitePositions';
 import { useMobileBack } from '@/hooks/useMobileBack';
-import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
+import { api } from '@/lib/api';
 
-import TradeSheet, { TradeSheetItem } from '@/components/TradeSheet';
+import type { TradeSheetItem } from '@/components/TradeSheet';
+const TradeSheet = dynamic(() => import('@/components/TradeSheet'), { ssr: false });
 import './page.css';
 import dynamic from 'next/dynamic';
 
@@ -16,6 +17,7 @@ const TradingChart = dynamic(() => import('@/components/TradingChart'), { ssr: f
 
 export default function OrderPage() {
   useAuth();
+  const router = useRouter();
   const [tab, setTab] = useState<'open' | 'closed'>('open');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState<string | null>(null);
@@ -109,19 +111,7 @@ export default function OrderPage() {
     setIsSheetOpen(false);
     setSelectedOrder(null);
     setTimeout(() => {
-      setTradeSheetSide('BOTH');
-      setTradeSheetItem({
-        name: order.symbol,
-        symbol: order.symbol,
-        kiteSymbol: order.kite_instrument,
-        segment: order.segment,
-        price: order.fill_price || 0,
-      });
-      setTradeSheetInitialOrder({
-        qty: order.qty,
-        order_type: order.order_type,
-        product_type: order.product_type,
-      });
+      router.push(`/watchlist?symbol=${encodeURIComponent(order.symbol)}&action=detail`);
     }, 80);
   };
 
@@ -152,8 +142,7 @@ export default function OrderPage() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
-
+      
       <main className="main-viewport">
         <div className="app-container">
           <div className="ord-root">
@@ -224,14 +213,31 @@ export default function OrderPage() {
 
                 {/* Loading */}
                 {ordersLoading && (
-                  <div className="ord-empty">
-                    <i className="fas fa-circle-notch fa-spin" />
-                    <p>Loading platform orders…</p>
+                  <div className="w-full flex flex-col gap-3">
+                    {[1, 2, 3, 4].map(i => (
+                      <div key={i} className="ord-card animate-pulse" style={{ opacity: 1 - (i * 0.15) }}>
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="h-5 bg-gray-200 dark:bg-gray-800 rounded w-32"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-16"></div>
+                        </div>
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-20"></div>
+                          <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-24"></div>
+                        </div>
+                        <div className="flex justify-between items-center mb-3">
+                          <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-24"></div>
+                          <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-28"></div>
+                        </div>
+                        <div className="flex justify-between items-center pt-3 border-t border-gray-100 dark:border-gray-800">
+                          <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded-full w-24"></div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                {/* Error */}
-                {error && (
+                {/* Error — only show when we have no orders to display (avoid blanking a stale-but-populated list) */}
+                {error && orders.length === 0 && (
                   <div className="ord-empty">
                     <i className="fas fa-exclamation-circle" style={{ color: '#ef4444' }} />
                     <p>{error}</p>
@@ -269,9 +275,9 @@ export default function OrderPage() {
                     >
                       <div className="ord-row ord-row-top">
                         <span className="ord-symbol">{order.symbol}</span>
-                        <span className={`ord-badge ${isBuy ? 'long' : 'short'}`}>
-                          <i className={`fas fa-arrow-${isBuy ? 'up' : 'down'}`} />
-                          {order.side}
+                        <span className={`ord-badge ${order.is_exit ? 'short' : (isBuy ? 'long' : 'short')}`}>
+                          <i className={`fas fa-arrow-${order.is_exit ? 'up' : 'down'}`} />
+                          {order.is_exit ? (isBuy ? 'SELL EXIT' : 'BUY EXIT') : (isBuy ? 'BUY' : 'SELL')}
                         </span>
                       </div>
                       <div className="ord-row ord-row-price">
@@ -283,7 +289,7 @@ export default function OrderPage() {
                       <div className="ord-row ord-row-info">
                         <div className="ord-info-inline">
                           <span className="ord-label">QTY:</span>
-                          <span className="ord-val">{fmtQty(order.qty)} ({order.lots} Lot)</span>
+                          <span className="ord-val">{fmtQty(order.qty)} ({Math.round(order.lots)} Lot)</span>
                         </div>
                         <div className="ord-info-inline right">
                           <span className="ord-label">TIME:</span>
@@ -322,7 +328,7 @@ export default function OrderPage() {
                       <div className="ord-row" style={{ marginTop: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span className="ord-type-pill" style={{ fontSize: '0.6rem' }}>{order.product_type}</span>
-                          {order.info && order.info !== 'Exit - USER' && (
+                          {order.info && order.info !== 'Exit - USER' && !order.info.includes('-') && (
                             <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
                               {order.info}
                             </span>
@@ -364,8 +370,7 @@ export default function OrderPage() {
                 })}
               </div>
 
-              <Footer activeTab="order" />
-            </div>
+                          </div>
 
             {/* Sheet for Closed Orders */}
             <div className={`ord-sheet-overlay${isSheetOpen ? ' open' : ''}`} onClick={() => setIsSheetOpen(false)} />
@@ -378,8 +383,9 @@ export default function OrderPage() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       <div className="os-symbol" style={{ color: 'var(--text-primary, #1A1A1A)', margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>{selectedOrder.symbol}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <span className={`ord-badge ${selectedOrder.side === 'BUY' ? 'long' : 'short'}`} style={{ fontSize: '0.65rem', padding: '2px 8px' }}>
-                          {selectedOrder.side === 'BUY' ? 'BUY' : 'SELL'}
+                        <span className={`ord-badge ${selectedOrder.is_exit ? 'short' : (selectedOrder.side === 'BUY' ? 'long' : 'short')}`} style={{ fontSize: '0.65rem', padding: '2px 8px' }}>
+                          <i className={`fas fa-arrow-${selectedOrder.is_exit ? 'up' : 'down'}`} style={{ marginRight: '4px' }} />
+                          {selectedOrder.is_exit ? (selectedOrder.side === 'BUY' ? 'SELL EXIT' : 'BUY EXIT') : selectedOrder.side}
                         </span>
                         {selectedOrder.product_type && (
                           <span className="ord-type-pill" style={{ fontSize: '0.65rem', padding: '2px 8px' }}>{selectedOrder.product_type}</span>
@@ -569,11 +575,7 @@ export default function OrderPage() {
                     else if (isTarget) clearData = { target: null };
                     else if (isGtt) clearData = { stop_loss: null, target: null };
 
-                    fetch(`/api/positions/${positionId}`, {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(clearData)
-                    }).then(() => {
+                    api.patch(`/api/positions/${positionId}`, clearData).then(() => {
                       refresh();
                     });
                   }

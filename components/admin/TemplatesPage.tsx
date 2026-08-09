@@ -25,7 +25,7 @@ export interface AccountTemplate {
 type View = 'list' | 'create' | 'edit';
 type Tab = 'templates' | 'scripts';
 
-export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) {
+export default function TemplatesPage({ isDemoMode, isBroker = false }: { isDemoMode?: boolean, isBroker?: boolean }) {
   const [tab, setTab] = useState<Tab>('templates');
   const [view, setView] = useState<View>('list');
   const [templates, setTemplates] = useState<AccountTemplate[]>([]);
@@ -38,19 +38,21 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
-    const res = await apiCall('/api/admin/templates', { method: 'GET' });
+    const url = isBroker ? '/api/broker/templates' : '/api/admin/templates';
+    const res = await apiCall(url, { method: 'GET' });
     setLoading(false);
     if (res.ok) {
       setTemplates(res.data as AccountTemplate[]);
     } else {
       setToast({ message: 'Failed to load templates', type: 'error' });
     }
-  }, []);
+  }, [isBroker]);
 
   useEffect(() => { loadTemplates(); }, [loadTemplates]);
 
   const handleSetDefault = async (template: AccountTemplate) => {
-    const res = await apiCall(`/api/admin/templates/${template.id}`, {
+    const url = isBroker ? `/api/broker/templates/${template.id}` : `/api/admin/templates/${template.id}`;
+    const res = await apiCall(url, {
       method: 'PATCH',
       body: JSON.stringify({ is_default: true }),
     });
@@ -65,7 +67,8 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
-    const res = await apiCall(`/api/admin/templates/${deleteTarget.id}`, { method: 'DELETE' });
+    const url = isBroker ? `/api/broker/templates/${deleteTarget.id}` : `/api/admin/templates/${deleteTarget.id}`;
+    const res = await apiCall(url, { method: 'DELETE' });
     setDeleting(false);
     if (res.ok || res.status === 204) {
       setToast({ message: `Template "${deleteTarget.name}" deleted`, type: 'success' });
@@ -84,6 +87,7 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
         onBack={() => setView('list')}
         onSaved={() => { setView('list'); loadTemplates(); }}
         isDemoMode={isDemoMode}
+        isBroker={isBroker}
       />
     );
   }
@@ -95,25 +99,26 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
         onBack={() => setView('list')}
         onSaved={() => { setView('list'); loadTemplates(); }}
         isDemoMode={isDemoMode}
+        isBroker={isBroker}
       />
     );
   }
 
   return (
-    <div style={{ padding: '16px', maxWidth: 900, margin: '0 auto' }}>
+    <div style={{ padding: '16px', maxWidth: 900, margin: '0 auto', background: '#ffffff' }}>
       <Toast toast={toast} onDismiss={() => setToast(null)} />
 
       {/* ── Tab switcher ── */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid #30363d', paddingBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', borderBottom: '1px solid #e5e7eb', paddingBottom: '0.75rem' }}>
         {(['templates', 'scripts'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
             style={{
-              background: tab === t ? '#2563eb' : 'transparent',
-              border: `1px solid ${tab === t ? '#2563eb' : '#30363d'}`,
+              background: tab === t ? '#2563eb' : '#ffffff',
+              border: `1px solid ${tab === t ? '#2563eb' : '#d1d5db'}`,
               borderRadius: '0.375rem',
-              color: tab === t ? '#fff' : '#8b949e',
+              color: tab === t ? '#fff' : '#6b7280',
               fontSize: '0.8125rem',
               fontWeight: 600,
               padding: '0.375rem 1rem',
@@ -157,10 +162,10 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
-          <h2 style={{ color: '#e6edf3', fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
+          <h2 style={{ color: '#111827', fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
             Account Templates
           </h2>
-          <p style={{ color: '#8b949e', fontSize: '12px', margin: '4px 0 0' }}>
+          <p style={{ color: '#6b7280', fontSize: '12px', margin: '4px 0 0' }}>
             Reusable settings presets you can apply to multiple users at once
           </p>
         </div>
@@ -174,9 +179,9 @@ export default function TemplatesPage({ isDemoMode }: { isDemoMode?: boolean }) 
       </div>
 
       {loading ? (
-        <div style={{ color: '#8b949e', padding: 20 }}>Loading templates…</div>
+        <div style={{ color: '#6b7280', padding: 20 }}>Loading templates…</div>
       ) : templates.length === 0 ? (
-        <div style={{ color: '#8b949e', padding: 40, textAlign: 'center', border: '1px dashed #30363d', borderRadius: 8 }}>
+        <div style={{ color: '#6b7280', padding: 40, textAlign: 'center', border: '1px dashed #d1d5db', borderRadius: 8 }}>
           No templates yet. Create one to get started.
         </div>
       ) : (
@@ -213,8 +218,8 @@ function TemplateCard({
 }) {
   return (
     <div style={{
-      background: '#161b22',
-      border: `1px solid ${template.is_default ? '#2563eb' : '#30363d'}`,
+      background: '#f9fafb',
+      border: `1px solid ${template.is_default ? '#2563eb' : '#e5e7eb'}`,
       borderRadius: 10,
       padding: '14px 16px',
     }}>
@@ -222,21 +227,21 @@ function TemplateCard({
         {/* Left: name + badges */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ color: '#e6edf3', fontWeight: 700, fontSize: '0.95rem' }}>{template.name}</span>
+            <span style={{ color: '#111827', fontWeight: 700, fontSize: '0.95rem' }}>{template.name}</span>
             {template.is_default && (
               <span style={{
-                background: '#1d4ed8', color: '#93c5fd', fontSize: '10px', fontWeight: 700,
+                background: '#dbeafe', color: '#1d4ed8', fontSize: '10px', fontWeight: 700,
                 padding: '2px 8px', borderRadius: 20, letterSpacing: '0.5px',
               }}>DEFAULT</span>
             )}
             <span style={{
-              background: '#21262d', color: '#8b949e', fontSize: '10px',
+              background: '#f3f4f6', color: '#6b7280', fontSize: '10px',
               padding: '2px 8px', borderRadius: 20,
             }}>{template.trading_mode.toUpperCase()}</span>
           </div>
 
           {template.description && (
-            <p style={{ color: '#8b949e', fontSize: '12px', margin: '4px 0 0', lineHeight: 1.5 }}>
+            <p style={{ color: '#6b7280', fontSize: '12px', margin: '4px 0 0', lineHeight: 1.5 }}>
               {template.description}
             </p>
           )}
@@ -256,7 +261,7 @@ function TemplateCard({
           <button
             onClick={onApply}
             style={{
-              background: '#14b8a6', border: 'none', borderRadius: 6, color: '#fff',
+              background: '#0d9488', border: 'none', borderRadius: 6, color: '#fff',
               fontSize: '12px', fontWeight: 600, padding: '6px 14px', cursor: 'pointer',
             }}
           >
@@ -265,7 +270,7 @@ function TemplateCard({
           <button
             onClick={onEdit}
             style={{
-              background: '#21262d', border: '1px solid #30363d', borderRadius: 6, color: '#c9d1d9',
+              background: '#ffffff', border: '1px solid #d1d5db', borderRadius: 6, color: '#374151',
               fontSize: '12px', padding: '5px 14px', cursor: 'pointer',
             }}
           >
@@ -275,7 +280,7 @@ function TemplateCard({
             <button
               onClick={onSetDefault}
               style={{
-                background: 'transparent', border: '1px solid #30363d', borderRadius: 6, color: '#8b949e',
+                background: 'transparent', border: '1px solid #d1d5db', borderRadius: 6, color: '#6b7280',
                 fontSize: '11px', padding: '5px 14px', cursor: 'pointer',
               }}
             >
@@ -285,7 +290,7 @@ function TemplateCard({
           <button
             onClick={onDelete}
             style={{
-              background: 'transparent', border: '1px solid #6b2727', borderRadius: 6, color: '#f87171',
+              background: 'transparent', border: '1px solid #fca5a5', borderRadius: 6, color: '#ef4444',
               fontSize: '11px', padding: '5px 14px', cursor: 'pointer',
             }}
           >
@@ -299,9 +304,10 @@ function TemplateCard({
 
 function Pill({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
-    <span style={{ fontSize: '11px', color: danger ? '#f87171' : '#8b949e' }}>
-      <span style={{ color: '#6e7681' }}>{label}: </span>
-      <span style={{ color: danger ? '#f87171' : '#c9d1d9', fontWeight: 600 }}>{value}</span>
+    <span style={{ fontSize: '11px', color: danger ? '#ef4444' : '#6b7280' }}>
+      <span style={{ color: '#9ca3af' }}>{label}: </span>
+      <span style={{ color: danger ? '#ef4444' : '#374151', fontWeight: 600 }}>{value}</span>
     </span>
   );
 }
+

@@ -2,8 +2,8 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { getSession } from '@/lib/auth';
-import Sidebar from '@/components/Sidebar';
+import { api, ApiError } from '@/lib/api';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import './page.css';
 
 interface ReferralEarning {
@@ -31,20 +31,10 @@ export default function ReferAndEarnPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const s = await getSession();
-      if (!s) {
-        router.push('/login');
-        return;
-      }
-      const res = await fetch('/api/referral/info', {
-        headers: { Authorization: `Bearer ${s.access_token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setBalance(data.balance || 0);
-        setReferralCode(data.code || '');
-        setEarnings(data.earnings || []);
-      }
+      const data = await api.get<{ balance?: number; code?: string; earnings?: ReferralEarning[] }>('/api/referral/info');
+      setBalance(data.balance || 0);
+      setReferralCode(data.code || '');
+      setEarnings(data.earnings || []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -57,19 +47,12 @@ export default function ReferAndEarnPage() {
     setClaiming(true);
     setClaimMsg(null);
     try {
-      const s = await getSession();
-      if (!s) return;
-      const res = await fetch('/api/referral/claim', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${s.access_token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to claim');
-      
+      const data = await api.post<{ claimed_amount: number }>('/api/referral/claim', {});
       setClaimMsg({ type: 'success', text: `Successfully claimed ₹${data.claimed_amount.toLocaleString('en-IN')}` });
       setBalance(0);
     } catch (e: any) {
-      setClaimMsg({ type: 'error', text: e.message || 'Error claiming balance' });
+      const msg = e instanceof ApiError ? (e.details as any)?.error || `Error ${e.status}` : e.message || 'Error claiming balance';
+      setClaimMsg({ type: 'error', text: msg });
     } finally {
       setClaiming(false);
     }
@@ -87,8 +70,7 @@ export default function ReferAndEarnPage() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
-      <main className="main-viewport">
+            <main className="main-viewport">
         <div className="mobile-app refer-root">
           <div className="refer-header">
             <Link href="/profile" className="back-btn">
@@ -99,7 +81,9 @@ export default function ReferAndEarnPage() {
 
           <div className="main-content padding-bottom">
             {loading ? (
-              <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.5 }}>Loading...</div>
+              <div style={{ padding: '40px 0', width: '100%' }}>
+                <AnimatedLoader text="Loading..." fullScreen={false} />
+              </div>
             ) : (
               <>
                 <div className="refer-balance-card">

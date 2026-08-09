@@ -1,6 +1,8 @@
+export const dynamic = 'force-dynamic';
+
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getRedisClient } from '@/lib/redis';
+import { getRedisClient, isRedisMock } from '@/lib/redis';
 import {
   loadStrikeConfig,
   applyExpiryFilter,
@@ -27,10 +29,6 @@ function getOptionChainSegment(sym: string): string {
   return 'STOCK-OPT';
 }
 
-// IN-MEMORY CACHE FOR API ROUTE
-const optionChainCache: Record<string, { data: any, timestamp: number }> = {};
-const CACHE_TTL_MS = 1000 * 60; // 1 minute cache
-
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -39,10 +37,18 @@ export async function GET(request: Request) {
     const expiry = searchParams.get('expiry');
     const today = new Date().toISOString().split('T')[0];
     
-    const cacheKey = `${symbol}_${expiry || 'default'}`;
-    const now = Date.now();
-    if (optionChainCache[cacheKey] && now - optionChainCache[cacheKey].timestamp < CACHE_TTL_MS) {
-      return NextResponse.json(optionChainCache[cacheKey].data);
+    const cacheKey = `optionChain:${symbol}_${expiry || 'default'}`;
+    const redis = getRedisClient();
+
+    if (!isRedisMock()) {
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return NextResponse.json(JSON.parse(cached));
+        }
+      } catch (e) {
+        console.error('Redis cache error for option chain:', e);
+      }
     }
 
     let usedFallback = false;
@@ -116,33 +122,33 @@ export async function GET(request: Request) {
       });
     }
 
+    let underlyingSymbol: string | undefined = undefined;
+
     // 5. Apply strike range filter using Redis ATM price
     if (options && options.length > 0) {
       try {
         const strikeConfig = await loadStrikeConfig(supabase);
-        const redis = getRedisClient();
 
         // Determine the segment to pick the right strike range
         const isIndex = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'BANKEX'].includes(symbol);
         const isMcx = ['GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLDM', 'SILVERM', 'CRUDEOILM', 'NATGASMINI'].includes(symbol);
         const range = isMcx ? strikeConfig.mcxOptionsRange : strikeConfig.indexOptionsRange;
 
-        // Look up ATM price from Redis
         const kiteIdMap: Record<string, string> = {
           'NIFTY': 'NSE:NIFTY 50', 'BANKNIFTY': 'NSE:NIFTY BANK',
           'FINNIFTY': 'NSE:NIFTY FIN SERVICE', 'MIDCPNIFTY': 'NSE:NIFTY MID SELECT',
           'SENSEX': 'BSE:SENSEX', 'BANKEX': 'BSE:BANKEX',
         };
-        const kiteId = kiteIdMap[symbol] ?? `MCX:${symbol}`;
-        const cached = await redis.hget('market:quotes', kiteId);
+        underlyingSymbol = kiteIdMap[symbol] ?? `MCX:${symbol}`;
 
-        // atmPrice already declared in outer scope
-        if (cached) {
-          const q = JSON.parse(cached);
-          atmPrice = q.last_price || q.ohlc?.close || q.close || 0;
+        const spotParam = searchParams.get('spotPrice');
+        if (spotParam) {
+          atmPrice = parseFloat(spotParam) || 0;
         }
-        
-        if (!atmPrice && isMcx) {
+
+        if (!atmPrice) {
+
+        if (isMcx) {
           let baseSymbol = symbol;
           if (symbol === 'GOLDM') baseSymbol = 'GOLD';
           else if (symbol === 'SILVERM') baseSymbol = 'SILVER';
@@ -160,24 +166,53 @@ export async function GET(request: Request) {
 
           if (futRes.data && futRes.data.length > 0) {
             const futSymbol = futRes.data[0].tradingsymbol;
-            const futCached = await redis.hget('market:quotes', `MCX:${futSymbol}`);
+            underlyingSymbol = `MCX:${futSymbol}`;
+            const futCached = await redis.hget('market:quotes', underlyingSymbol);
             if (futCached) {
               const q = JSON.parse(futCached);
               atmPrice = q.last_price || q.ohlc?.close || q.close || 0;
             }
           }
-        }
 
-        if (!atmPrice) {
-          const altKey = kiteId.split(':')[1] || symbol;
-          const altCached = await redis.hget('market:quotes', altKey);
-          if (altCached) {
-            const q = JSON.parse(altCached);
+          if (!atmPrice) {
+            const directFutRes = await supabase
+              .from('instruments')
+              .select('tradingsymbol')
+              .eq('name', symbol)
+              .eq('segment', 'MCX-FUT')
+              .gte('expiry', today)
+              .order('expiry', { ascending: true })
+              .limit(1);
+            if (directFutRes.data && directFutRes.data.length > 0) {
+              const directFutSymbol = directFutRes.data[0].tradingsymbol;
+              const directUnderlyingSymbol = `MCX:${directFutSymbol}`;
+              const directFutCached = await redis.hget('market:quotes', directUnderlyingSymbol);
+              if (directFutCached) {
+                const q = JSON.parse(directFutCached);
+                atmPrice = q.last_price || q.ohlc?.close || q.close || 0;
+                underlyingSymbol = directUnderlyingSymbol;
+              }
+            }
+          }
+        } else {
+          // For indices, rely on the kiteId cache
+          const cached = await redis.hget('market:quotes', underlyingSymbol);
+          if (cached) {
+            const q = JSON.parse(cached);
             atmPrice = q.last_price || q.ohlc?.close || q.close || 0;
           }
+          if (!atmPrice) {
+            const altKey = underlyingSymbol.split(':')[1] || symbol;
+            const altCached = await redis.hget('market:quotes', altKey);
+            if (altCached) {
+              const q = JSON.parse(altCached);
+              atmPrice = q.last_price || q.ohlc?.close || q.close || 0;
+            }
+          }
         }
+      }
 
-        if (!atmPrice && options.length > 0) {
+      if (!atmPrice && options.length > 0) {
           console.warn(`[option-chain] Redis ATM price unavailable for ${symbol}, falling back to median strike`);
           usedFallback = true;
           const middleIndex = Math.floor(options.length / 2);
@@ -220,20 +255,31 @@ export async function GET(request: Request) {
 
     const sortedStrikes = Object.values(strikeMap).sort((a: any, b: any) => a.strike - b.strike);
 
+    const kiteIdMapFallback: Record<string, string> = {
+      'NIFTY': 'NSE:NIFTY 50', 'BANKNIFTY': 'NSE:NIFTY BANK',
+      'FINNIFTY': 'NSE:NIFTY FIN SERVICE', 'MIDCPNIFTY': 'NSE:NIFTY MID SELECT',
+      'SENSEX': 'BSE:SENSEX', 'BANKEX': 'BSE:BANKEX',
+    };
+    let finalUnderlyingSymbol = underlyingSymbol || kiteIdMapFallback[symbol] || `MCX:${symbol}`;
+
     const responseData = {
       success: true,
       symbol,
       expiry: selectedExpiry,
       expiries: uniqueExpiries,
       strikes: sortedStrikes,
-      underlyingPrice: atmPrice
+      underlyingPrice: atmPrice,
+      underlyingSymbol: (typeof underlyingSymbol !== 'undefined') ? underlyingSymbol : finalUnderlyingSymbol
     };
 
     // Store in cache only if we got a real spot price
-    if (!usedFallback) {
-      optionChainCache[cacheKey] = { data: responseData, timestamp: now };
-      // Also cache under the specific expiry key to prevent next lookup
-      optionChainCache[`${symbol}_${selectedExpiry}`] = { data: responseData, timestamp: now };
+    if (!usedFallback && !isRedisMock()) {
+      try {
+        await redis.setex(cacheKey, 60, JSON.stringify(responseData));
+        await redis.setex(`optionChain:${symbol}_${selectedExpiry}`, 60, JSON.stringify(responseData));
+      } catch (e) {
+        console.error('Redis cache set error for option chain:', e);
+      }
     }
 
     return NextResponse.json(responseData);

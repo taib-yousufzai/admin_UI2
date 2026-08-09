@@ -7,27 +7,24 @@ import { getSession } from '@/lib/auth';
 import { pageCache } from '@/lib/pageCache';
 import { useMyPositions, EnrichedPosition } from '@/hooks/useMyPositions';
 import { useOrderEntry } from '@/hooks/useOrderEntry';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import { useMobileBack } from '@/hooks/useMobileBack';
 import { useBalance } from '@/hooks/useBalance';
-import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
-import TradeSheet, { TradeSheetItem } from '@/components/TradeSheet';
+import { api, ApiError } from '@/lib/api';
+import type { TradeSheetItem } from '@/components/TradeSheet';
+import HoldLockCountdown from '@/components/HoldLockCountdown';
+const TradeSheet = dynamic(() => import('@/components/TradeSheet'), { ssr: false });
+import { ErrorModal } from '@/components/ErrorModal';
 import dynamic from 'next/dynamic';
 import './page.css';
 
 const TradingChart = dynamic(() => import('@/components/TradingChart'), { ssr: false });
 
 
-const formatHoldTime = (sec: number) => {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
-};
-
 export default function PositionPage() {
   const router = useRouter();
   useAuth();
-  
+
   const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
     getSession().then((session) => {
@@ -37,13 +34,18 @@ export default function PositionPage() {
       }
     });
   }, []);
-  const { positions, loading: posLoading, error: posError, refresh, updatePositionLocally, startConversion, endConversion } = useMyPositions(5000);
+  const { positions, loading: posLoading, error: posError, refresh, updatePositionLocally,
+    removePositionLocally,
+    restorePositionLocally,
+    startConversion,
+    endConversion
+  } = useMyPositions(5000);
   const { closePosition, closePositionsBatch, loading: closingPos } = useOrderEntry();
 
-  // Listen for position-closed events fired by TradingChart so we immediately
+  // Listen for position-closed events fired by TradingChart so we eventually
   // refresh without waiting for the next 5-second poll cycle
   useEffect(() => {
-    const handler = () => { refresh(); fetchClosed(); };
+    const handler = () => { setTimeout(() => { refresh(); fetchClosed(); }, 200); };
     window.addEventListener('position-closed', handler);
     return () => window.removeEventListener('position-closed', handler);
   }, [refresh]);
@@ -55,14 +57,7 @@ export default function PositionPage() {
   const fetchClosed = async () => {
     setClosedLoading(true);
     try {
-      const session = await getSession();
-      if (!session) return;
-      const res = await fetch('/api/positions?status=closed', {
-        headers: { Authorization: `Bearer ${session.access_token}` },
-        cache: 'no-store',
-      });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await api.get<{ positions: any[] }>('/api/positions?status=closed');
       // Enrich closed positions with the computed fields expected by the UI.
       // Closed positions from the raw API don't go through useMyPositions enrichment,
       // so we derive the missing EnrichedPosition fields here.
@@ -91,8 +86,14 @@ export default function PositionPage() {
 
   useEffect(() => {
     fetchClosed();
-    const iv = setInterval(fetchClosed, 5000);
-    return () => clearInterval(iv);
+    // Closed positions don't need rapid polling — refresh on events + slow fallback
+    const iv = setInterval(fetchClosed, 30000);
+    const onOrderPlaced = () => setTimeout(() => fetchClosed(), 200);
+    window.addEventListener('order_placed', onOrderPlaced);
+    return () => {
+      clearInterval(iv);
+      window.removeEventListener('order_placed', onOrderPlaced);
+    };
   }, []);
 
   const { balance: balanceFromHook, settlementAmount } = useBalance();
@@ -103,22 +104,22 @@ export default function PositionPage() {
     let cancelled = false;
 
     const fetchOrders = () => {
-      getSession().then((session) => {
-        if (cancelled || !session) return;
-        fetch('/api/orders?status=executed', { headers: { Authorization: `Bearer ${session.access_token}` } })
-          .then(res => res.ok ? res.json() : { orders: [] })
-          .then(data => {
-            if (!cancelled && data.orders) {
-              setRawOrders(data.orders);
-            }
-          })
-          .catch(() => { });
-      });
+      if (cancelled) return;
+      api.get<{ orders: any[] }>('/api/orders?status=executed')
+        .then(data => {
+          if (!cancelled && data.orders) {
+            setRawOrders(data.orders);
+          }
+        })
+        .catch(() => { });
     };
     fetchOrders();
-    const orderTimer = setInterval(fetchOrders, 5000);
+    // Orders don't need rapid polling — refresh on events + slow fallback
+    const orderTimer = setInterval(fetchOrders, 30000);
+    const onOrderPlaced = () => setTimeout(() => fetchOrders(), 200);
+    window.addEventListener('order_placed', onOrderPlaced);
 
-    return () => { cancelled = true; clearInterval(orderTimer); };
+    return () => { cancelled = true; clearInterval(orderTimer); window.removeEventListener('order_placed', onOrderPlaced); };
   }, []);
 
   const formatBalance = (val: number | null) => {
@@ -132,6 +133,13 @@ export default function PositionPage() {
   const [selectedPos, setSelectedPos] = useState<EnrichedPosition | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [errorModalMsg, setErrorModalMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => setErrorModalMsg((e as CustomEvent).detail || 'Order failed.');
+    window.addEventListener('order_error', handler);
+    return () => window.removeEventListener('order_error', handler);
+  }, []);
   const [chartItem, setChartItem] = useState<any | null>(null);
 
   const openChart = (pos: EnrichedPosition) => {
@@ -165,6 +173,9 @@ export default function PositionPage() {
   // Exit All Modal
   const [isExitAllModalOpen, setIsExitAllModalOpen] = useState(false);
   const [isExitingAll, setIsExitingAll] = useState(false);
+
+  // Group Exit Modal
+  const [groupExitModalGroup, setGroupExitModalGroup] = useState<GroupedPosition | null>(null);
 
   // Add More trade sheet
   const [tradeSheetItem, setTradeSheetItem] = useState<TradeSheetItem | null>(null);
@@ -225,7 +236,7 @@ export default function PositionPage() {
     setTradeSheetItem({
       name: pos.symbol,
       symbol: pos.symbol,
-      kiteSymbol: pos.symbol,
+      kiteSymbol: pos.kite_instrument || pos.symbol,
       segment: pos.settlement || 'INR',
       price: pos.current_ltp,
       change: `${pos.pnl_percent >= 0 ? '+' : ''}${pos.pnl_percent.toFixed(2)}%`,
@@ -236,21 +247,47 @@ export default function PositionPage() {
     setTradeSheetIsAddMore(true);
   };
 
-  const openTradeAgain = (pos: EnrichedPosition) => {
+  const openTradeExit = (pos: EnrichedPosition, isPartial: boolean) => {
     closeSheet();
     setTimeout(() => {
       setTradeSheetItem({
         name: pos.symbol,
         symbol: pos.symbol,
-        kiteSymbol: pos.symbol,
+        kiteSymbol: pos.kite_instrument || pos.symbol,
         segment: pos.settlement || 'INR',
         price: pos.current_ltp,
         change: `${pos.pnl_percent >= 0 ? '+' : ''}${pos.pnl_percent.toFixed(2)}%`,
       });
-      setTradeSheetSide('BOTH');
-      setTradeSheetExitMode(false);
+      setTradeSheetSide(pos.side === 'BUY' ? 'SELL' : 'BUY');
+      setTradeSheetExitMode(true);
       setTradeSheetProductType(pos.product_type as 'INTRADAY' | 'CARRY');
       setTradeSheetIsAddMore(false);
+      setTradeSheetLinkedPosId(pos.id);
+      setTradeSheetInitialExitQty(isPartial ? pos.qty : undefined);
+    }, 80);
+  };
+
+  const openGroupTradeExit = (group: GroupedPosition) => {
+    setTradeSheetItem({
+      name: group.symbol,
+      symbol: group.symbol,
+      kiteSymbol: group.representativePos.kite_instrument || group.symbol,
+      segment: group.settlement || 'INR',
+      price: group.current_ltp,
+      change: `${group.pnl_percent >= 0 ? '+' : ''}${group.pnl_percent.toFixed(2)}%`,
+    });
+    setTradeSheetSide(group.side === 'BUY' ? 'SELL' : 'BUY');
+    setTradeSheetExitMode(true);
+    setTradeSheetProductType(group.product_type as 'INTRADAY' | 'CARRY');
+    setTradeSheetIsAddMore(false);
+    setTradeSheetLinkedPosId(group.ids.length === 1 ? group.ids[0] : null);
+    setTradeSheetInitialExitQty(group.qty_total);
+  };
+
+  const openTradeAgain = (pos: EnrichedPosition) => {
+    closeSheet();
+    setTimeout(() => {
+      router.push(`/watchlist?symbol=${encodeURIComponent(pos.symbol)}&action=detail`);
     }, 80);
   };
 
@@ -258,7 +295,7 @@ export default function PositionPage() {
     setTradeSheetItem({
       name: pos.symbol,
       symbol: pos.symbol,
-      kiteSymbol: pos.symbol,
+      kiteSymbol: pos.kite_instrument || pos.symbol,
       segment: pos.settlement || 'INR',
       price: pos.current_ltp,
       change: `${pos.pnl_percent >= 0 ? '+' : ''}${pos.pnl_percent.toFixed(2)}%`,
@@ -275,23 +312,6 @@ export default function PositionPage() {
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
-  };
-
-  // Tick every second so hold-timer countdown rerenders live without waiting
-  // for the next position poll cycle.
-  const [, setTickCount] = useState(0);
-  useEffect(() => {
-    const interval = setInterval(() => setTickCount(c => c + 1), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Compute live remaining hold seconds directly from entry_time so the
-  // countdown is accurate to the second regardless of the hook poll interval.
-  const computeRemaining = (pos: EnrichedPosition): number => {
-    if (!pos.hold_lock_active) return 0;
-    const elapsed = Math.floor((Date.now() - new Date(pos.entry_time).getTime()) / 1000);
-    const remaining = pos.required_hold_seconds - elapsed;
-    return remaining > 0 ? remaining : 0;
   };
 
   const toggleProductType = async (pos: EnrichedPosition) => {
@@ -311,8 +331,7 @@ export default function PositionPage() {
       setIsFetchingPreview(true);
       setConvertPreviewBrokerage(null);
       try {
-        const res = await fetch(`/api/positions/${pos.id}/convert-preview?product_type=${newType}`);
-        const data = await res.json();
+        const data = await api.get<{ carryBrokerage?: number }>(`/api/positions/${pos.id}/convert-preview?product_type=${newType}`);
         if (data.carryBrokerage !== undefined) {
           setConvertPreviewBrokerage(data.carryBrokerage);
         }
@@ -351,39 +370,27 @@ export default function PositionPage() {
     }
 
     try {
-      const session = await getSession();
-      if (!session) {
-        showToast('Unauthorized. Please login again.');
-        // Revert on auth error
-        if (endConversion) {
-          endConversion(pos.id);
-        }
-        if (selectedPos && selectedPos.id === pos.id) {
-          setSelectedPos(prev => prev ? { ...prev, product_type: originalType } : null);
-        }
-        return;
-      }
-
-      const res = await fetch(`/api/positions/${pos.id}/convert`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({ product_type: newType })
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to convert position product type');
-      }
+      await api.post<void>(`/api/positions/${pos.id}/convert`, { product_type: newType });
 
       showToast(`Position converted to ${newType} successfully`);
       // Await refresh to guarantee that rawPositions contains the updated DB value before we clear in-flight state
       await refresh();
     } catch (err: any) {
       console.error('Failed to convert position:', err);
-      showToast(`Conversion failed: ${err.message}`);
+      // Handle session-less / auth error feedback gracefully
+      if (err instanceof ApiError && err.status === 401) {
+        showToast('Unauthorized. Please login again.');
+        if (endConversion) endConversion(pos.id);
+        if (selectedPos && selectedPos.id === pos.id) {
+          setSelectedPos(prev => prev ? { ...prev, product_type: originalType } : null);
+        }
+        convertingIdsRef.current.delete(pos.id);
+        return;
+      }
+      const errorMsg = (err instanceof ApiError && err.details && typeof err.details === 'object' && 'error' in err.details)
+        ? (err.details as any).error
+        : err.message;
+      showToast(`Conversion failed: ${errorMsg}`);
 
       // Revert bottom sheet state on server/network failure
       if (selectedPos && selectedPos.id === pos.id) {
@@ -416,16 +423,36 @@ export default function PositionPage() {
     if (exitingPosIds.current.has(posId)) return; // already in flight
     exitingPosIds.current.add(posId);
     setExitingSet(new Set(exitingPosIds.current));
+
+    const posToClose = positions.find(p => p.id === posId);
+    if (removePositionLocally) {
+      removePositionLocally(posId);
+    }
+
+    // Close sheet immediately for instant feedback
+    closeSheet();
+    showToast('Closing position...');
+
     try {
-      const res = await closePosition(posId);
+      const [res] = await Promise.all([
+        closePosition(posId, posToClose?.ltp ?? undefined, posToClose?.symbol ?? undefined, posToClose?.settlement ?? undefined, posToClose?.side ?? undefined),
+        new Promise(r => setTimeout(r, 800))
+      ]);
       if (res.success) {
         showToast('Position closed successfully');
-        closeSheet();
         refresh();
         window.dispatchEvent(new CustomEvent('position-closed'));
       } else {
         showToast(`Error: ${res.error}`);
+        if (posToClose && restorePositionLocally) {
+          restorePositionLocally(posId);
+        } else if (posToClose) refresh();
       }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+      if (posToClose && restorePositionLocally) {
+        restorePositionLocally(posId);
+      } else if (posToClose) refresh();
     } finally {
       exitingPosIds.current.delete(posId);
       setExitingSet(new Set(exitingPosIds.current));
@@ -456,17 +483,19 @@ export default function PositionPage() {
     hold_lock_active: boolean;
     ids: string[];              // all underlying position IDs
     representativePos: EnrichedPosition; // first position for actions
+    is_closing?: boolean;
   }
 
   const groupedOpenPositions: GroupedPosition[] = useMemo(() => {
     const map = new Map<string, GroupedPosition>();
     for (const pos of openPositions) {
-      const key = `${pos.symbol}|${pos.side}|${pos.product_type}`;
+      const displaySymbol = pos.kite_instrument ? pos.kite_instrument.split(':').pop() || pos.symbol : pos.symbol;
+      const key = `${displaySymbol}|${pos.side}|${pos.product_type}`;
       const existing = map.get(key);
       if (!existing) {
         map.set(key, {
           key,
-          symbol: pos.symbol,
+          symbol: displaySymbol,
           side: pos.side,
           product_type: pos.product_type || 'INTRADAY',
           settlement: pos.settlement || '',
@@ -478,6 +507,7 @@ export default function PositionPage() {
           hold_lock_active: pos.hold_lock_active,
           ids: [pos.id],
           representativePos: pos,
+          is_closing: pos.is_closing,
         });
       } else {
         const newQty = existing.qty_open + pos.qty_open;
@@ -492,6 +522,7 @@ export default function PositionPage() {
         existing.total_pnl = newPnl;
         existing.pnl_percent = investment > 0 ? parseFloat(((newPnl / investment) * 100).toFixed(2)) : 0;
         existing.hold_lock_active = existing.hold_lock_active || pos.hold_lock_active;
+        existing.is_closing = existing.is_closing || pos.is_closing;
         existing.ids.push(pos.id);
       }
     }
@@ -516,12 +547,13 @@ export default function PositionPage() {
   const groupedClosedPositions: GroupedClosedPosition[] = useMemo(() => {
     const map = new Map<string, GroupedClosedPosition>();
     for (const pos of closedPositions) {
-      const key = `${pos.symbol}|${pos.side}|${pos.product_type}`;
+      const displaySymbol = pos.kite_instrument ? pos.kite_instrument.split(':').pop() || pos.symbol : pos.symbol;
+      const key = `${displaySymbol}|${pos.side}|${pos.product_type}`;
       const existing = map.get(key);
       if (!existing) {
         map.set(key, {
           key,
-          symbol: pos.symbol,
+          symbol: displaySymbol,
           side: pos.side,
           product_type: pos.product_type || 'INTRADAY',
           settlement: pos.settlement || '',
@@ -601,6 +633,7 @@ export default function PositionPage() {
   const handleExitAllConfirm = async () => {
     if (!hasOpenPositions) return;
     setIsExitingAll(true);
+    setIsExitAllModalOpen(false); // Close modal immediately for instant UX
 
     let successCount = 0;
     let failCount = 0;
@@ -611,21 +644,34 @@ export default function PositionPage() {
     if (exitablePositions.length === 0) {
       showToast('All open positions are currently locked due to holding rules.');
       setIsExitingAll(false);
-      setIsExitAllModalOpen(false);
       return;
     }
 
-    const result = await closePositionsBatch(exitablePositions.map(p => p.id));
+    const posIds = exitablePositions.map(p => p.id);
+    if (removePositionLocally) {
+      posIds.forEach(id => removePositionLocally(id));
+    }
+
+    const [result] = await Promise.all([
+      closePositionsBatch(posIds),
+      new Promise(r => setTimeout(r, 800))
+    ]);
 
     if (result.success && result.results) {
       let firstError = '';
-      result.results.forEach((res: any) => {
-        if (res.success) {
-          successCount++;
-        } else {
+      const successfulIds = new Set(result.results.filter((r: any) => r.success).map((r: any) => r.positionId));
+      
+      posIds.forEach(id => {
+        if (!successfulIds.has(id)) {
           failCount++;
-          if (!firstError && res.error) firstError = res.error;
+          if (restorePositionLocally) restorePositionLocally(id);
+        } else {
+          successCount++;
         }
+      });
+
+      result.results.forEach((res: any) => {
+        if (!res.success && !firstError && res.error) firstError = res.error;
       });
 
       setIsExitingAll(false);
@@ -638,11 +684,72 @@ export default function PositionPage() {
       }
     } else {
       failCount = exitablePositions.length;
+      if (restorePositionLocally) {
+        posIds.forEach(id => restorePositionLocally(id));
+      }
       setIsExitingAll(false);
       setIsExitAllModalOpen(false);
       showToast(`Closed ${successCount}, failed ${failCount}. Error: ${result.error || 'Unknown'}`);
     }
     refresh();
+    // Delayed re-fetch to catch Supabase propagation delay
+    setTimeout(() => {
+      refresh();
+      window.dispatchEvent(new Event('position-closed'));
+    }, 1500);
+  };
+
+  const handleGroupExitConfirm = async () => {
+    if (!groupExitModalGroup) return;
+    const group = groupExitModalGroup;
+    setGroupExitModalGroup(null);
+    setIsExitingAll(true); // use the same central spinner
+
+    const posIds = group.ids;
+    if (removePositionLocally) {
+      posIds.forEach(id => removePositionLocally(id));
+    }
+
+    const [result] = await Promise.all([
+      closePositionsBatch(posIds),
+      new Promise(r => setTimeout(r, 800))
+    ]);
+
+    if (result.success) {
+      const successfulIds = new Set((result.results || []).filter((r: any) => r.success).map((r: any) => r.positionId));
+      let hadFailures = false;
+      let firstError = '';
+      
+      posIds.forEach(id => {
+        if (!successfulIds.has(id)) {
+          hadFailures = true;
+          if (restorePositionLocally) restorePositionLocally(id);
+        }
+      });
+
+      if (result.results) {
+        result.results.forEach((res: any) => {
+          if (!res.success && !firstError && res.error) firstError = res.error;
+        });
+      }
+
+      if (hadFailures) {
+        showToast(`Closed some, but failed for others. Error: ${firstError || 'Unknown'}`);
+      } else {
+        showToast(`Successfully closed ${group.symbol} position(s).`);
+      }
+    } else {
+      if (restorePositionLocally) {
+        posIds.forEach(id => restorePositionLocally(id));
+      }
+      showToast(`Error closing ${group.symbol}: ${result.error || 'Unknown'}`);
+    }
+    setIsExitingAll(false);
+    refresh();
+    setTimeout(() => {
+      refresh();
+      window.dispatchEvent(new Event('position-closed'));
+    }, 200);
   };
 
   const totalPnl = useMemo(() => positions.reduce((acc, p) => acc + (p.total_pnl || 0), 0), [positions]);
@@ -660,12 +767,20 @@ export default function PositionPage() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
 
       <main className="main-viewport">
         <div className="app-container">
           <div className="pos-root">
             <div className="pos-shell">
+              {isExitingAll && (
+                <div className="bm-overlay">
+                  <div className="bm-loader">
+                    <div className="bm-loader-bar"></div>
+                    <div className="bm-loader-bar"></div>
+                    <div className="bm-loader-bar"></div>
+                  </div>
+                </div>
+              )}
 
               {/* ── Header (Mobile Only) ── */}
               <div className="pos-header mobile-only">
@@ -779,13 +894,25 @@ export default function PositionPage() {
               <div className="pos-content">
 
                 {posLoading && (
-                  <div className="pos-empty">
-                    <i className="fas fa-circle-notch fa-spin" />
-                    <p>Loading positions…</p>
+                  <div className="w-full flex flex-col gap-3">
+                    {[1, 2, 3, 4].map(i => (
+                      <div key={i} className="pos-card animate-pulse" style={{ opacity: 1 - (i * 0.15) }}>
+                        <div className="pos-card-main flex justify-between w-full">
+                          <div className="flex flex-col gap-2">
+                            <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-24"></div>
+                            <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-32"></div>
+                          </div>
+                          <div className="flex flex-col gap-2 items-end">
+                            <div className="h-4 bg-gray-200 dark:bg-gray-800 rounded w-16"></div>
+                            <div className="h-5 bg-gray-200 dark:bg-gray-800 rounded-lg w-20 mt-1"></div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                {!posLoading && !posError && (
+                {!posLoading && (
                   currentMain === 'cumulative' ? (
                     currentSub === 'open' ? (
                       groupedOpenPositions.length === 0 ? (
@@ -794,11 +921,12 @@ export default function PositionPage() {
                           <p>No open positions</p>
                         </div>
                       ) : groupedOpenPositions.map(group => (
-                        <div key={group.key} className={`pos-card${expandedPosId === group.key ? ' pos-card--expanded' : ''}${group.hold_lock_active ? ' pos-card--locked' : ''}`} onClick={() => toggleExpand(group.key)}>
-                          <div className="pos-card-main">
+                        <div key={group.key} className={`pos-card relative overflow-hidden transition-all duration-300${expandedPosId === group.key ? ' pos-card--expanded' : ''}${group.hold_lock_active ? ' pos-card--locked' : ''}`} onClick={() => toggleExpand(group.key)}>
+                          <div className="pos-card-main relative z-0">
                             <div className="pos-card-left">
                               <div className="pos-card-symbol">
                                 <span className="pos-symbol-text">{group.symbol}</span>
+                                {group.hold_lock_active && <i className="fas fa-lock lock-icon-inline" />}
                               </div>
                               <div className="pos-card-details">
                                 <span>Avg: <strong>{fmtPrice(group.avg_price, group.settlement)}</strong></span>
@@ -839,7 +967,14 @@ export default function PositionPage() {
                             </div>
                           </div>
                           {expandedPosId === group.key && (
-                            <div className="pos-card-actions" onClick={e => e.stopPropagation()}>
+                            <>
+                              {group.hold_lock_active && (
+                                <div className="pos-lock-banner" style={{ margin: '8px 12px 0 12px' }} onClick={e => e.stopPropagation()}>
+                                  <i className="fas fa-lock banner-icon" />
+                                  <span>Anti-Scalping lock active. Remaining: <HoldLockCountdown pos={group.representativePos} /></span>
+                                </div>
+                              )}
+                              <div className="pos-card-actions" onClick={e => e.stopPropagation()}>
                               <button className="pca-btn pca-add" onClick={() => openAddMore(group.representativePos)}>
                                 <i className="fas fa-plus-circle" /> Add More
                               </button>
@@ -850,10 +985,11 @@ export default function PositionPage() {
                                     setLockModalPos(group.representativePos);
                                     return;
                                   }
-                                  openExitSheet(group.representativePos, group.qty_open, true);
+                                  // Always open TradeSheet for exit mode
+                                  openGroupTradeExit(group);
                                 }}
                               >
-                                <i className="fas fa-times-circle" /> Exit All
+                                <i className="fas fa-times-circle" /> Exit
                               </button>
                               <button
                                 style={{
@@ -875,7 +1011,8 @@ export default function PositionPage() {
                                 </svg>
                               </button>
                             </div>
-                          )}
+                          </>
+                        )}
                         </div>
                       ))
                     ) : (
@@ -888,53 +1025,53 @@ export default function PositionPage() {
                         // Find the first underlying closed position to use as the detail sheet target
                         const representativePos = closedPositions.find(p => group.ids.includes(p.id));
                         return (
-                        <div key={group.key} className="pos-card" style={{ cursor: 'pointer' }} onClick={() => {
-                          if (representativePos) {
-                            // Build a synthetic enriched position with the grouped averages for the sheet
-                            handleRowClick({
-                              ...representativePos,
-                              avg_price: group.avg_price,
-                              entry_price: group.avg_price,
-                              exit_price: group.exit_price,
-                              qty_total: group.qty_total,
-                              qty_open: group.qty_total,
-                              pnl: group.pnl,
-                              total_pnl: group.pnl,
-                              pnl_percent: group.pnl_percent,
-                            });
-                          }
-                        }}>
-                          <div className="pos-card-left">
-                            <div className="pos-card-symbol">
-                              <span className="pos-symbol-text">{group.symbol}</span>
+                          <div key={group.key} className="pos-card" style={{ cursor: 'pointer' }} onClick={() => {
+                            if (representativePos) {
+                              // Build a synthetic enriched position with the grouped averages for the sheet
+                              handleRowClick({
+                                ...representativePos,
+                                avg_price: group.avg_price,
+                                entry_price: group.avg_price,
+                                exit_price: group.exit_price,
+                                qty_total: group.qty_total,
+                                qty_open: group.qty_total,
+                                pnl: group.pnl,
+                                total_pnl: group.pnl,
+                                pnl_percent: group.pnl_percent,
+                              });
+                            }
+                          }}>
+                            <div className="pos-card-left">
+                              <div className="pos-card-symbol">
+                                <span className="pos-symbol-text">{group.symbol}</span>
+                              </div>
+                              <div className="pos-card-details">
+                                <span>Avg Entry: <strong>{fmtPrice(group.avg_price, group.settlement)}</strong></span>
+                                <span>Qty: <strong>{group.qty_total}</strong></span>
+                              </div>
+                              <div style={{ marginTop: '5px', display: 'flex', gap: '8px' }}>
+                                {group.product_type && (
+                                  <span className={`pos-product-badge ${group.product_type === 'CARRY' ? 'carry' : ''}`}>
+                                    {group.product_type}
+                                  </span>
+                                )}
+                                {group.ids.length > 1 && (
+                                  <span style={{ fontSize: '0.65rem', fontWeight: 700, background: 'var(--card-alt-bg, #F1F5F9)', color: 'var(--text-secondary)', padding: '2px 6px', borderRadius: '20px' }}>
+                                    {group.ids.length} trades
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div className="pos-card-details">
-                              <span>Avg Entry: <strong>{fmtPrice(group.avg_price, group.settlement)}</strong></span>
-                              <span>Qty: <strong>{group.qty_total}</strong></span>
-                            </div>
-                            <div style={{ marginTop: '5px', display: 'flex', gap: '8px' }}>
-                              {group.product_type && (
-                                <span className={`pos-product-badge ${group.product_type === 'CARRY' ? 'carry' : ''}`}>
-                                  {group.product_type}
-                                </span>
-                              )}
-                              {group.ids.length > 1 && (
-                                <span style={{ fontSize: '0.65rem', fontWeight: 700, background: 'var(--card-alt-bg, #F1F5F9)', color: 'var(--text-secondary)', padding: '2px 6px', borderRadius: '20px' }}>
-                                  {group.ids.length} trades
-                                </span>
-                              )}
+                            <div className="pos-card-right">
+                              <span className={`pos-badge${group.side === 'BUY' ? ' long' : ' short'}`}>
+                                {group.side}
+                              </span>
+                              <div className={`pos-card-pnl${group.pnl >= 0 ? ' green' : ' red'}`}>
+                                {fmtUSD(group.pnl, group.settlement)}
+                              </div>
+                              <div className="pos-card-ltp">Avg Exit: <strong>{fmtPrice(group.exit_price, group.settlement)}</strong></div>
                             </div>
                           </div>
-                          <div className="pos-card-right">
-                            <span className={`pos-badge${group.side === 'BUY' ? ' long' : ' short'}`}>
-                              {group.side}
-                            </span>
-                            <div className={`pos-card-pnl${group.pnl >= 0 ? ' green' : ' red'}`}>
-                              {fmtUSD(group.pnl, group.settlement)}
-                            </div>
-                            <div className="pos-card-ltp">Avg Exit: <strong>{fmtPrice(group.exit_price, group.settlement)}</strong></div>
-                          </div>
-                        </div>
                         );
                       })
                     )
@@ -967,7 +1104,8 @@ export default function PositionPage() {
                               {/* Left Side: Symbol and Metadata */}
                               <div className="pos-detail-left-col">
                                 <div className="pos-detail-symbol">
-                                  <span className="pos-symbol-text">{pos.symbol}</span>
+                                  <span className="pos-symbol-text">{pos.kite_instrument ? pos.kite_instrument.split(':').pop() : pos.symbol}</span>
+                                  {pos.hold_lock_active && <i className="fas fa-lock lock-icon-inline" />}
                                 </div>
                                 <div className="pos-detail-meta">
                                   <div className="pos-detail-meta-row">
@@ -1018,7 +1156,14 @@ export default function PositionPage() {
                               </div>
                             </div>
                             {expandedPosId === pos.id && (pos.status === 'open' || pos.status === 'active') && (
-                              <div className="pos-card-actions" onClick={e => e.stopPropagation()}>
+                              <>
+                                {pos.hold_lock_active && (
+                                  <div className="pos-lock-banner" style={{ margin: '8px 12px 0 12px' }} onClick={e => e.stopPropagation()}>
+                                    <i className="fas fa-lock banner-icon" />
+                                    <span>Anti-Scalping lock active. Remaining: <HoldLockCountdown pos={pos} /></span>
+                                  </div>
+                                )}
+                                <div className="pos-card-actions" onClick={e => e.stopPropagation()}>
                                 <button className="pca-btn pca-add" onClick={() => openAddMore(actualPos)}>
                                   <i className="fas fa-plus-circle" /> Add More
                                 </button>
@@ -1028,7 +1173,7 @@ export default function PositionPage() {
                                     if (pos.hold_lock_active) {
                                       setLockModalPos(actualPos);
                                     } else {
-                                      openExitSheet(actualPos, actualPos.qty_open, false);
+                                      openTradeExit(actualPos, false);
                                     }
                                   }}
                                 >
@@ -1054,12 +1199,13 @@ export default function PositionPage() {
                                   </svg>
                                 </button>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    ) : (
-                      closedPositions.length === 0 ? (
+                            </>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    closedPositions.length === 0 ? (
                         <div className="pos-empty">
                           <i className="fas fa-history" />
                           <p>No closed positions</p>
@@ -1068,7 +1214,7 @@ export default function PositionPage() {
                         <div key={pos.id} className="pos-card" onClick={() => handleRowClick(pos)}>
                           <div className="pos-card-left">
                             <div className="pos-card-symbol">
-                              <span className="pos-symbol-text">{pos.symbol}</span>
+                              <span className="pos-symbol-text">{pos.kite_instrument ? pos.kite_instrument.split(':').pop() : pos.symbol}</span>
                             </div>
                             <div className="pos-card-details">
                               <span>Entry: <strong>{fmtPrice(pos.entry_price, pos.settlement)}</strong></span>
@@ -1105,7 +1251,6 @@ export default function PositionPage() {
                 )}
               </div>
 
-              <Footer activeTab="position" positions={positions} />
             </div>
 
             {/* Sheet */}
@@ -1222,7 +1367,7 @@ export default function PositionPage() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', width: '100%', marginBottom: '8px' }}>
                         <div style={{ background: 'var(--card-alt-bg, #F8F9FB)', border: '1px solid var(--border-card, #E2E6EA)', padding: '6px 10px', borderRadius: '12px' }}>
                           <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-secondary, #6B7280)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>Avg Price</div>
-                          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary, #1A1A1A)' }}>{fmtPrice((selectedPos.avg_price || selectedPos.entry_price) * selectedPos.qty_total, selectedPos.settlement)}</div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary, #1A1A1A)' }}>{fmtPrice(selectedPos.avg_price || selectedPos.entry_price, selectedPos.settlement)}</div>
                         </div>
                         <div style={{ background: 'var(--card-alt-bg, #F8F9FB)', border: '1px solid var(--border-card, #E2E6EA)', padding: '6px 10px', borderRadius: '12px' }}>
                           <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-secondary, #6B7280)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>Quantity</div>
@@ -1242,7 +1387,7 @@ export default function PositionPage() {
                         <div style={{ background: 'var(--card-alt-bg, #F8F9FB)', border: '1px solid var(--border-card, #E2E6EA)', padding: '6px 10px', borderRadius: '12px' }}>
                           <div style={{ fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-secondary, #6B7280)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>Used Margin</div>
                           <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-primary, #1A1A1A)' }}>
-                            {fmtPrice(selectedPos.margin_required || selectedPos.locked_margin || 0, selectedPos.settlement)}
+                            {fmtPrice(selectedPos.locked_margin || selectedPos.margin_required || 0, selectedPos.settlement)}
                           </div>
                         </div>
                         <div style={{ background: 'var(--card-alt-bg, #F8F9FB)', border: '1px solid var(--border-card, #E2E6EA)', padding: '6px 10px', borderRadius: '12px' }}>
@@ -1382,7 +1527,7 @@ export default function PositionPage() {
                       <div className="ps-meta-row">
                         <div>
                           <div className="ps-meta-label">Avg Price</div>
-                          <div className="ps-meta-val">{fmtPrice((selectedPos.avg_price || selectedPos.entry_price) * (selectedPos.qty_open || selectedPos.qty_total), selectedPos.settlement)}</div>
+                          <div className="ps-meta-val">{fmtPrice(selectedPos.avg_price || selectedPos.entry_price, selectedPos.settlement)}</div>
                         </div>
                         <div style={{ textAlign: 'center' }}>
                           <div className="ps-meta-label">Quantity</div>
@@ -1397,6 +1542,12 @@ export default function PositionPage() {
 
 
                       {/* P&L + Exit All */}
+                      {selectedPos.hold_lock_active && (
+                        <div className="pos-lock-banner" style={{ margin: '0 0 12px 0', width: '100%' }}>
+                          <i className="fas fa-lock banner-icon" />
+                          <span>Anti-Scalping lock active. Remaining: <HoldLockCountdown pos={selectedPos} /></span>
+                        </div>
+                      )}
                       <div className="ps-pnl-section">
                         <div>
                           <div className="ps-pnl-label">Current P&amp;L</div>
@@ -1406,10 +1557,10 @@ export default function PositionPage() {
                         </div>
                         <button
                           className={`ps-btn-exit${(selectedPos.hold_lock_active || exitingSet.has(selectedPos.id)) ? ' disabled-lock' : ''}`}
-                          onClick={() => { if (!selectedPos.hold_lock_active && !exitingSet.has(selectedPos.id)) handleExit(selectedPos.id); }}
+                          onClick={() => { if (!selectedPos.hold_lock_active && !exitingSet.has(selectedPos.id)) openTradeExit(selectedPos, false); }}
                           disabled={selectedPos.hold_lock_active || exitingSet.has(selectedPos.id)}
                         >
-                          {exitingSet.has(selectedPos.id) ? <><i className="fas fa-circle-notch fa-spin" style={{ marginRight: 6 }} />Closing…</> : 'Exit All'}
+                          Exit All
                         </button>
                       </div>
 
@@ -1418,7 +1569,7 @@ export default function PositionPage() {
                         <button className="ps-btn-add" onClick={() => openAddMore(selectedPos)}>Add More</button>
                         <button
                           className={`ps-btn-partial${(selectedPos.hold_lock_active || exitingSet.has(selectedPos.id)) ? ' disabled-lock' : ''}`}
-                          onClick={() => { if (!selectedPos.hold_lock_active && !exitingSet.has(selectedPos.id)) handleExit(selectedPos.id); }}
+                          onClick={() => { if (!selectedPos.hold_lock_active && !exitingSet.has(selectedPos.id)) openTradeExit(selectedPos, true); }}
                           disabled={selectedPos.hold_lock_active || exitingSet.has(selectedPos.id)}
                         >
                           Partial Exit
@@ -1441,7 +1592,9 @@ export default function PositionPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '16px', padding: '12px 16px', background: 'var(--card-alt-bg)', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
                   <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Time Remaining</span>
                   <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-                    {lockModalPos ? formatHoldTime(computeRemaining(lockModalPos)) : '00m 00s'}
+                    {lockModalPos
+                      ? <HoldLockCountdown pos={lockModalPos} style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }} />
+                      : '00m 00s'}
                   </span>
                 </div>
 
@@ -1486,7 +1639,7 @@ export default function PositionPage() {
                     disabled={isExitingAll}
                   >
                     {isExitingAll ? (
-                      <><i className="fas fa-circle-notch fa-spin" style={{ marginRight: '6px' }} /> Closing...</>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><AnimatedLoader size="small" /> Closing...</span>
                     ) : (
                       'Confirm Exit All'
                     )}
@@ -1498,23 +1651,25 @@ export default function PositionPage() {
             {/* Convert Confirm Modal */}
             <div className={`pos-modal-overlay${convertConfirmPos ? ' open' : ''}`} onClick={() => setConvertConfirmPos(null)}>
               <div className="pos-modal-card" onClick={e => e.stopPropagation()}>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '16px', padding: '12px 16px', background: 'var(--card-alt-bg)', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Brokerage</span>
-                  {isFetchingPreview ? (
-                    <i className="fas fa-circle-notch fa-spin" style={{ color: 'var(--text-muted)' }}></i>
-                  ) : (
-                    <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                      ₹{convertPreviewBrokerage != null ? convertPreviewBrokerage.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '0.00'}
-                    </span>
-                  )}
-                </div>
+
+                {convertConfirmPos?.product_type === 'INTRADAY' && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '16px', padding: '12px 16px', background: 'var(--card-alt-bg)', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Carry Brokerage</span>
+                    {isFetchingPreview ? (
+                      <AnimatedLoader size="small" />
+                    ) : (
+                      <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                        ₹{convertPreviewBrokerage != null ? convertPreviewBrokerage.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '0.00'}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="pos-modal-title">Convert to {convertConfirmPos?.product_type === 'INTRADAY' ? 'CARRY' : 'INTRADAY'}</div>
                 <div className="pos-modal-desc" style={{ color: 'var(--text-secondary)' }}>
                   {convertConfirmPos?.product_type === 'INTRADAY' ? (
                     <>
-                      When you convert intraday to carry there's a deduction of carry brokerage, which would be deducted immediately.
+                      Converting to CARRY will immediately deduct a carry brokerage fee from your balance.
                     </>
                   ) : (
                     <>
@@ -1545,6 +1700,29 @@ export default function PositionPage() {
         </div>
       </main>
 
+      {/* ── Group Exit Confirmation Modal ── */}
+      {groupExitModalGroup && (
+        <div className="confirm-backdrop" onClick={() => setGroupExitModalGroup(null)}>
+          <div className="confirm-card" onClick={e => e.stopPropagation()}>
+            <div className="confirm-icon">
+              <i className="fas fa-exclamation-triangle" />
+            </div>
+            <h3 className="confirm-title">Exit {groupExitModalGroup.symbol}?</h3>
+            <p className="confirm-message">
+              Are you sure you want to close {groupExitModalGroup.ids.length > 1 ? `all ${groupExitModalGroup.ids.length}` : 'this'} position(s) for this symbol?
+            </p>
+            <div className="confirm-actions">
+              <button className="confirm-btn confirm-btn-cancel" onClick={() => setGroupExitModalGroup(null)}>
+                Cancel
+              </button>
+              <button className="confirm-btn confirm-btn-exit" onClick={handleGroupExitConfirm}>
+                Yes, Exit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add More — full watchlist-style trade sheet */}
       <TradeSheet
         item={tradeSheetItem}
@@ -1556,6 +1734,7 @@ export default function PositionPage() {
         isFromPositions={tradeSheetIsAddMore}
         linkedPosId={tradeSheetLinkedPosId}
         initialExitQty={tradeSheetInitialExitQty}
+        hideLotText={true}
       />
 
       {/* Chart Sheet */}
@@ -1571,6 +1750,7 @@ export default function PositionPage() {
           )}
         </div>
       </div>
+      <ErrorModal error={errorModalMsg} onClose={() => setErrorModalMsg(null)} title="Order Failed" />
     </div>
   );
 }

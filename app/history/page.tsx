@@ -3,9 +3,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useRouter } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
 import { supabase } from '@/lib/supabaseClient';
+import { api, ApiError } from '@/lib/api';
 import './page.css';
 
 interface HistoryItem {
@@ -87,21 +86,12 @@ export default function HistoryPage() {
 
     async function fetchHistory() {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        // Fetch both orders and positions history
-        const [ordersRes, posRes] = await Promise.all([
-          fetch('/api/orders?status=executed,rejected,cancelled', {
-            headers: { Authorization: `Bearer ${session.access_token}` }
-          }),
-          fetch('/api/positions?status=closed', {
-            headers: { Authorization: `Bearer ${session.access_token}` }
-          })
+        // Fetch both orders and positions history — last 30 days by default
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const [ordersData, posData] = await Promise.all([
+          api.get<{ orders: any[] }>('/api/orders?status=executed,rejected,cancelled&limit=500').catch(() => ({ orders: [] })),
+          api.get<{ positions: any[] }>(`/api/positions?status=closed&from=${thirtyDaysAgo}`).catch(() => ({ positions: [] })),
         ]);
-
-        const ordersData = ordersRes.ok ? await ordersRes.json() : { orders: [] };
-        const posData = posRes.ok ? await posRes.json() : { positions: [] };
 
         const formattedOrders = (ordersData.orders || []).map((o: any) => ({
           id: o.id,
@@ -155,6 +145,7 @@ export default function HistoryPage() {
             productType: p.product_type || 'INTRADAY',
             settlement,
             settlementAmount: Math.abs(Number(p.settlement_amount || 0)),
+            entry_brokerage: p.entry_brokerage || 0,
             timestamp: p.updated_at ? new Date(p.updated_at).getTime() : new Date(p.created_at).getTime(),
           };
         });
@@ -216,7 +207,7 @@ export default function HistoryPage() {
     const posHistory = filteredData.filter(h => h.status === 'closed');
     const gp = posHistory.filter(h => h.pnl > 0).reduce((acc, h) => acc + h.pnl, 0);
     const gl = posHistory.filter(h => h.pnl < 0).reduce((acc, h) => acc + Math.abs(h.pnl), 0);
-    const b = filteredData.reduce((acc, h) => acc + h.brokerage, 0);
+    const b = filteredData.reduce((acc, h) => acc + (h.brokerage || (h as any).entry_brokerage || 0), 0);
     const s = posHistory.reduce((acc, h) => acc + (h.settlementAmount ?? 0), 0);
     return { gp, gl, b, s, n: gp - gl - b - s };
   }, [filteredData]);
@@ -228,8 +219,7 @@ export default function HistoryPage() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
-
+      
       <main className="main-viewport">
         <div className="flex-1 flex flex-col min-h-0 bg-gray-50 dark:bg-[#0B0E14] relative">
           <style>{`
@@ -374,12 +364,14 @@ export default function HistoryPage() {
                       const pnlPercent = item.entryPrice ? ((item.pnl / (item.entryPrice * item.qty)) * 100).toFixed(2) : "0.00";
 
                       return (
-                        <div key={item.id} className="history-card" style={{ cursor: 'pointer' }} onClick={() => router.push(`/watchlist?symbol=${encodeURIComponent(item.scriptName)}`)}>
+                        <div key={item.id} className="history-card" style={{ cursor: 'pointer' }} onClick={() => router.push(`/watchlist?symbol=${encodeURIComponent(item.scriptName)}&action=detail`)}>
                           <div className="history-card-header">
                             <div className="script-info">
                               <span className="script-name">{item.scriptName}</span>
                               <div className="script-badges">
-                                <span className={`order-type-badge ${item.type.toLowerCase()}`}>{item.type}</span>
+                                <span className={`order-type-badge ${item.type.toLowerCase()}`}>
+                                  {item.type}
+                                </span>
                                 <span style={{ fontSize: '0.55rem', color: '#9AA4BF' }}>{item.orderType}</span>
                                 {currentTab === 'order' && (
                                   <span className={`order-type-badge ${item.status === 'executed' ? 'completed' : 'pending'}`}>
@@ -438,7 +430,22 @@ export default function HistoryPage() {
                                 return `Intraday: ₹${intraday}\nCarry: ₹${carry}\nGTT: ₹${gtt}`;
                               }
                             })()} style={{ position: 'relative' }}>
-                              <i className="fas fa-receipt"></i> {formatPrice(item.brokerage || 0)}
+                              <i className="fas fa-receipt"></i> {(() => {
+                                // Use brokerage field directly; fall back to entry_brokerage or sum of breakdown columns
+                                // for positions that predate the brokerage column being populated
+                                const direct = item.brokerage || 0;
+                                if (direct > 0) return formatPrice(direct);
+                                // Fallback to entry_brokerage if available (since brokerage was charged upfront at entry)
+                                const entryBrk = (item as any).entry_brokerage || 0;
+                                if (entryBrk > 0) return formatPrice(entryBrk);
+                                if (currentTab === 'position') {
+                                  const computed = (item.entry_intraday_brokerage || 0) + (item.entry_carry_brokerage || 0) +
+                                    (item.exit_intraday_brokerage || 0) + (item.exit_carry_brokerage || 0);
+                                  return formatPrice(computed);
+                                }
+                                const computed = (item.intraday_brokerage || 0) + (item.carry_brokerage || 0) + (item.gtt_brokerage || 0);
+                                return formatPrice(computed);
+                              })()}
                             </span>
                             {currentTab === 'position' && (
                               <span className="detail-item" style={{ color: '#64748b', fontSize: '0.7rem' }}>
@@ -469,8 +476,7 @@ export default function HistoryPage() {
                 </div>
               </div>
 
-              <Footer activeTab="history" />
-            </div>
+                          </div>
           </div>
         </div>
       </main>

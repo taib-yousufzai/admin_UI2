@@ -20,14 +20,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // Keep these updated when NSE revises lot sizes, but they're only used when
 // the instruments table hasn't been synced yet.
 const FALLBACK_LOT_SIZES: Record<string, number> = {
-  BANKNIFTY:   15,
-  BANKEX:      15,
-  FINNIFTY:    25,
-  MIDCPNIFTY:  50,
-  MIDCP:       50,
-  MIDCAP:      50,
-  NIFTY:       25,
-  SENSEX:      10,
+  BANKNIFTY:   30,
+  BANKEX:      30,
+  FINNIFTY:    60,
+  MIDCPNIFTY:  120,
+  MIDCP:       120,
+  MIDCAP:      120,
+  NIFTY:       65,
+  SENSEX:      20,
   GOLD:        100,
   GOLDM:       10,
   SILVER:      30,
@@ -57,8 +57,8 @@ export async function getLotSizeFromDB(symbol: string, supabase: SupabaseClient)
       .gt('lot_size', 0);
 
     if (scriptSettings && scriptSettings.length > 0) {
-      const sorted = [...scriptSettings].sort((a, b) => b.symbol.length - a.symbol.length);
-      const match = sorted.find(s => n.includes(s.symbol.toUpperCase()));
+      const sorted = [...scriptSettings].sort((a, b) => (b.symbol || '').length - (a.symbol || '').length);
+      const match = sorted.find(s => s.symbol && n.includes(s.symbol.toUpperCase()));
       if (match && Number(match.lot_size) > 0) return Number(match.lot_size);
     }
   } catch { /* fall through */ }
@@ -77,7 +77,7 @@ export async function getLotSizeFromDB(symbol: string, supabase: SupabaseClient)
     } else if (instruments && instruments.length > 0) {
       // Sort by name length descending so more specific names match first
       // (e.g. CRUDEOILM before CRUDEOIL, GOLDM before GOLD)
-      const sorted = [...instruments].sort((a, b) => b.name.length - a.name.length);
+      const sorted = [...instruments].sort((a, b) => (b.name || '').length - (a.name || '').length);
       const match = sorted.find(s => s.name && n.startsWith(s.name.toUpperCase()));
       if (match && Number(match.lot_size) > 0) return Number(match.lot_size);
     }
@@ -100,11 +100,11 @@ export function getLotSizeFallback(
 
   // 1. script_settings override
   if (dbSettings && dbSettings.length > 0) {
-    const sorted = [...dbSettings].sort((a, b) => b.symbol.length - a.symbol.length);
-    const exactMatch = sorted.find(s => n === s.symbol.toUpperCase());
+    const sorted = [...dbSettings].sort((a, b) => (b.symbol || '').length - (a.symbol || '').length);
+    const exactMatch = sorted.find(s => s.symbol && n === s.symbol.toUpperCase());
     if (exactMatch && Number(exactMatch.lot_size) > 0) return Number(exactMatch.lot_size);
 
-    const prefixMatch = sorted.find(s => n.startsWith(s.symbol.toUpperCase()));
+    const prefixMatch = sorted.find(s => s.symbol && n.startsWith(s.symbol.toUpperCase()));
     if (prefixMatch && Number(prefixMatch.lot_size) > 0) return Number(prefixMatch.lot_size);
   }
 

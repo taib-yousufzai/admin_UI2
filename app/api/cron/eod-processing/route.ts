@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getSharedKiteSession } from '@/lib/kiteSession';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 mins
@@ -21,16 +21,20 @@ async function fetchLtp(symbol: string, settlement: string): Promise<number | nu
   if (isCrypto) {
     try {
       const sym = cleanSym.endsWith('USDT') ? cleanSym : `${cleanSym}USDT`;
-      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : 'http://localhost:8080');
+      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : null);
       const params = new URLSearchParams({ symbols: sym });
-      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store' });
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(50) });
       if (resTicker.ok) {
         const json = await resTicker.json();
         if (json.success && json.data && json.data[sym]) {
           return Number(json.data[sym].last_price);
         }
       }
-      const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store' });
+      const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`, { cache: 'no-store', signal: AbortSignal.timeout(50) });
       if (res.ok) {
         const data = await res.json();
         return data.price ? parseFloat(data.price) : null;
@@ -144,30 +148,18 @@ export async function GET(request: Request) {
             charge = Math.max(0, Math.round(charge * 100) / 100);
 
             if (charge > 0) {
-              const currentBalance = Number(userProfile.balance || 0);
-              const newBalance = currentBalance - charge;
-
-              // Debit balance
-              const { error: uError } = await admin
-                .from('profiles')
-                .update({ balance: newBalance })
-                .eq('id', userProfile.id);
+              const idempotencyKey = `EOD_CARRY_${pos.id}_${new Date().toISOString().slice(0, 10)}`;
+              const { data: charged, error: uError } = await admin.rpc('apply_carry_charges_v1', {
+                p_position_id: pos.id,
+                p_charge_amount: charge,
+                p_idempotency_key: idempotencyKey
+              });
 
               if (!uError) {
-                userProfile.balance = newBalance; // update local cache
-
-                // Log transaction
-                await admin.from('transactions').insert({
-                  user_id: userProfile.id,
-                  type: 'FEE',
-                  amount: charge,
-                  status: 'APPROVED',
-                  ref_id: `EOD Carry Charge: ${pos.symbol}`,
-                  created_at: new Date().toISOString(),
-                });
+                userProfile.balance = Number(userProfile.balance || 0) - charge; // update local cache
                 results.carryCharged++;
               } else {
-                results.errors.push(`Failed to debit charge for pos ${pos.id}`);
+                results.errors.push(`Failed to debit charge for pos ${pos.id}: ${uError.message}`);
               }
             }
           }
@@ -190,3 +182,4 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+

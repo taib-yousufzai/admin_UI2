@@ -1,6 +1,8 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
 import { WatchlistItem, TabLabel, getTabForItem, getDefaultWatchlistItems } from '@/app/watchlist/page';
+import AnimatedLoader from '@/components/AnimatedLoader';
+import { api, ApiError } from '@/lib/api';
 
 interface WatchlistSearchProps {
   activeTab: TabLabel;
@@ -41,12 +43,10 @@ export default function WatchlistSearch({ activeTab, addedSymbols, onAdd, onRemo
 
   const fetchLiveResults = async (q: string, tab: string, signal: AbortSignal) => {
     try {
-      const res = await fetch(`/api/market/instruments/search?q=${encodeURIComponent(q)}&tab=${encodeURIComponent(tab)}`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-        signal
-      });
-      if (!res.ok) return [];
-      const data = await res.json();
+      const data = await api.get<WatchlistItem[]>(
+        `/api/market/instruments/search?q=${encodeURIComponent(q)}&tab=${encodeURIComponent(tab)}`,
+        { signal }
+      );
       return Array.isArray(data) ? data : [];
     } catch (err: any) {
       if (err.name !== 'AbortError') console.error('Search API error:', err);
@@ -141,9 +141,9 @@ export default function WatchlistSearch({ activeTab, addedSymbols, onAdd, onRemo
 
   return (
     <div className={`search-wrapper ${query ? 'has-text' : ''}`} ref={searchContainerRef} style={{ position: 'relative', width: '100%' }}>
-      <svg className="search-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-        <path d="M7.33333 12.6667C10.2789 12.6667 12.6667 10.2789 12.6667 7.33333C12.6667 4.38781 10.2789 2 7.33333 2C4.38781 2 2 4.38781 2 7.33333C2 10.2789 4.38781 12.6667 7.33333 12.6667Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        <path d="M14 14.0001L11.1 11.1001" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <svg className="search-icon" width="18" height="18" viewBox="0 0 16 16" fill="none">
+        <path d="M7.33333 12.6667C10.2789 12.6667 12.6667 10.2789 12.6667 7.33333C12.6667 4.38781 10.2789 2 7.33333 2C4.38781 2 2 4.38781 2 7.33333C2 10.2789 4.38781 12.6667 7.33333 12.6667Z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M14 14.0001L11.1 11.1001" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
       </svg>
       <input 
         className="search-input"
@@ -173,7 +173,9 @@ export default function WatchlistSearch({ activeTab, addedSymbols, onAdd, onRemo
         <div className="search-results-section" style={{ display: 'flex', flexDirection: 'column', position: 'absolute', top: 'calc(100% + 12px)', left: '-16px', right: '-16px', bottom: 'auto', height: 'calc(100vh - 130px)', zIndex: 1000, marginTop: 0, maxHeight: 'none', overflowY: 'hidden', boxShadow: 'none', border: 'none', borderRadius: 0, background: '#FFFFFF' }}>
           <div className="section-subtitle" style={{ padding: '12px 16px', margin: 0, borderBottom: '1px solid #EFF2F8', display: 'flex', justifyContent: 'space-between', flexShrink: 0 }}>
             <span><i className="fas fa-search"></i> SEARCH RESULTS</span>
-            <span id="searchResultCount" style={{ color: '#8F9BB3' }}>{isSearching ? 'SEARCHING...' : `${results.length} MATCHES`}</span>
+            <span id="searchResultCount" style={{ color: '#8F9BB3', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {isSearching ? <AnimatedLoader size="small" text="SEARCHING..." /> : `${results.length} MATCHES`}
+            </span>
           </div>
           <div id="searchResultsList" style={{ paddingBottom: '8px', flex: 1, overflowY: 'auto' }}>
             {results.length === 0 && !isSearching && (

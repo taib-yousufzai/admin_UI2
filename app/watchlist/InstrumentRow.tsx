@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { QuoteData } from '@/hooks/useMarketQuotes';
-import { ComexQuoteData } from '@/hooks/useComexQuotes';
+import { ComexQuoteData } from '@/contexts/ComexDataContext';
 import TickFlash from '@/components/TickFlash';
 
 export interface WatchlistItem {
@@ -27,7 +27,7 @@ interface InstrumentRowProps {
   quote?: QuoteData;
   binanceQuote?: QuoteData;
   comexQuote?: ComexQuoteData;
-  onTrade: (item: WatchlistItem) => void;
+  onTrade: (item: WatchlistItem, side?: 'BUY' | 'SELL' | 'BOTH') => void;
   onDetail?: (item: WatchlistItem) => void;
   basketMode?: boolean;
   onBasketBuy?: (item: WatchlistItem) => void;
@@ -35,10 +35,15 @@ interface InstrumentRowProps {
 }
 
 function getExchangeBadge(segment: string) {
-  if (segment.includes('NSE')) return 'NFO';
-  if (segment.includes('BSE')) return 'BFO';
-  if (segment.includes('MCX')) return 'MCX';
-  return 'MISC';
+  if (!segment) return 'OTH';
+  if (segment.startsWith('NSE') && segment !== 'NSE - Equity') return 'NFO';
+  if (segment.startsWith('BSE') && segment !== 'BSE - Equity') return 'BFO';
+  if (segment.startsWith('MCX') || segment.includes('MCX')) return 'MCX';
+  if (segment.startsWith('CDS') || segment.includes('FOREX')) return 'CDS';
+  if (segment.includes('CRYPTO') || segment === 'Crypto') return 'CRYPTO';
+  if (segment === 'NSE - Equity') return 'NSE';
+  if (segment === 'BSE - Equity') return 'BSE';
+  return 'OTH';
 }
 
 function getPctClass(pct: number) {

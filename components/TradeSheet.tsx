@@ -2,26 +2,30 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useOrderEntry, OrderType, ProductType } from '@/hooks/useOrderEntry';
+import { parseOptionSymbol } from '@/lib/parseOptionSymbol';
+import AnimatedLoader from '@/components/AnimatedLoader';
+
 import { supabase } from '@/lib/supabaseClient';
+import { api, ApiError } from '@/lib/api';
 import { useActivePositions } from '@/hooks/useActivePositions';
 import { useMarketQuotes } from '@/hooks/useMarketQuotes';
 import { useComexQuotes } from '@/hooks/useComexQuotes';
-import { calculateMarginPortion } from '@/lib/marginCalculator';
+import { calculateMarginPortion } from '@/lib/trading/MarginCalculator';
 import { ErrorModal } from '@/components/ErrorModal';
-export interface TradeSheetItem {
-  name: string;
-  symbol: string;
-  kiteSymbol: string;
-  binanceSymbol?: string;
-  comexSymbol?: string;
-  segment: string;
-  price: number;
-  change?: string;
-  expiry?: string;
-}
+import { useTradeConfig } from '@/contexts/TradeConfigContext';
+import { useBalance } from '@/hooks/useBalance';
+import { mapSegmentWithSymbol } from '@/lib/trading/SymbolMapping';
+import type { TradingInstrument } from '@/lib/types/instrument';
+
+/**
+ * @deprecated Import `TradingInstrument` from `@/lib/types/instrument` instead.
+ * Kept as a type alias during migration so existing `as TradeSheetItem` casts
+ * still compile without changes at every call site.
+ */
+export type TradeSheetItem = TradingInstrument;
 
 interface TradeSheetProps {
-  item: TradeSheetItem | null;
+  item: TradingInstrument | null;
   side: 'BUY' | 'SELL' | 'BOTH';
   onClose: () => void;
   onSuccess?: () => void;
@@ -34,72 +38,20 @@ interface TradeSheetProps {
   isFromPositions?: boolean;
   linkedPosId?: string | null;
   initialExitQty?: number;
+  hideLotText?: boolean;
 }
 
-function getLotSize(name: string, scriptSettings?: { symbol: string; lot_size: number }[]): number {
-  const n = name.toUpperCase();
-  if (scriptSettings && scriptSettings.length > 0) {
-    const sortedSettings = [...scriptSettings].sort((a, b) => b.symbol.length - a.symbol.length);
-    const match = sortedSettings.find(s => n.includes(s.symbol.toUpperCase()));
-    if (match) return Number(match.lot_size);
-  }
-  if (n.includes('BANKNIFTY') || n.includes('BANKEX')) return 15;
-  if (n.includes('FINNIFTY')) return 25;
-  if (n.includes('MIDCP') || n.includes('MIDCAP')) return 50;
-  if (n.includes('SENSEX')) return 10;
-  if (n.includes('NIFTY')) return 25;
-  if (n.includes('GOLDM')) return 10;
-  if (n.includes('GOLD')) return 100;
-  if (n.includes('SILVERM')) return 5;
-  if (n.includes('SILVER')) return 30;
-  if (n.includes('CRUDEOILM')) return 10;
-  if (n.includes('CRUDEOIL')) return 100;
-  if (n.includes('NATGASMINI')) return 250;
-  if (n.includes('NATURALGAS')) return 1250;
-  return 1;
-}
-
-function mapSegmentToDbSegment(s: string, symbol: string = ''): string {
-  if (!s && !symbol) return '';
-  const trimmed = (s || '').trim().toUpperCase();
-
-  if (['COMEX - FUTURES', 'COMEX - OPTIONS', 'COMEX', 'COI'].includes(trimmed)) return 'COMEX';
-  if (trimmed === 'CRYPTO') return 'CRYPTO';
-
-  const n = symbol.toUpperCase();
-  if (n) {
-    if (['BTC', 'ETH', 'DOGE', 'SOL', 'XRP', 'ADA', 'BNB', 'DOT', 'LTC', 'AVAX', 'MATIC'].some(c => n === c || n.startsWith(c + 'USDT'))) return 'CRYPTO';
-    if (n.includes('GOLD') || n.includes('SILVER') || n.includes('CRUDEOIL') || n.includes('NATURALGAS') || n.includes('NATGAS')) {
-      if (n.endsWith('CE') || n.endsWith('PE')) return 'MCX-OPT';
-      return 'MCX-FUT';
-    }
-    if (n.includes('NIFTY') || n.includes('SENSEX') || n.includes('BANKEX')) {
-      if (n.endsWith('CE') || n.endsWith('PE')) return 'INDEX-OPT';
-      return 'INDEX-FUT';
-    }
-    if (n.endsWith('CE') || n.endsWith('PE')) return 'STOCK-OPT';
-    if (n.endsWith('FUT')) return 'STOCK-FUT';
-    if (n.includes('-') || n.includes('/')) return 'FOREX';
-    if (trimmed === 'NSE') return 'NSE-EQ';
-  }
-
-  if (['NSE - FUTURES', 'BSE - FUTURES', 'NFO - FUTURES', 'BFO - FUTURES'].includes(trimmed)) return 'INDEX-FUT';
-  if (['NSE - OPTIONS', 'BSE - OPTIONS', 'NFO - OPTIONS', 'BFO - OPTIONS'].includes(trimmed)) return 'INDEX-OPT';
-  if (['NSE - STOCK FUTURES', 'BSE - STOCK FUTURES', 'NFO - STOCK FUTURES', 'BFO - STOCK FUTURES'].includes(trimmed)) return 'STOCK-FUT';
-  if (['NSE - STOCK OPTIONS', 'BSE - STOCK OPTIONS', 'NFO - STOCK OPTIONS', 'BFO - STOCK OPTIONS'].includes(trimmed)) return 'STOCK-OPT';
-  if (trimmed === 'MCX - FUTURES') return 'MCX-FUT';
-  if (trimmed === 'MCX - OPTIONS') return 'MCX-OPT';
-  if (['NSE - EQUITY', 'BSE - EQUITY'].includes(trimmed)) return 'NSE-EQ';
-  if (trimmed === 'CRYPTO') return 'CRYPTO';
-  if (trimmed === 'FOREX' || trimmed === 'CDS - FUTURES' || trimmed === 'CDS - OPTIONS') return 'FOREX';
-  if (trimmed === 'COMEX - FUTURES' || trimmed === 'COMEX - OPTIONS' || trimmed === 'COMEX' || trimmed === 'COI') return 'COMEX';
-
-
-  return trimmed;
-}
-
-export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = false, productType: propProductType, initialOrder, isModify = false, modifyingOrderId, isFromPositions = false, linkedPosId = null, initialExitQty: propInitialExitQty }: TradeSheetProps) {
+export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = false, productType: propProductType, initialOrder, isModify = false, modifyingOrderId, isFromPositions = false, linkedPosId = null, initialExitQty: propInitialExitQty, hideLotText = false }: TradeSheetProps) {
   const { placeOrder, loading: placingOrder } = useOrderEntry();
+
+  const [isClosing, setIsClosing] = useState(false);
+  const handleCloseAnimation = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 150); // match CSS transition time
+  };
 
   const [orderUnit, setOrderUnit] = useState<'qty' | 'lot'>('qty');
   const [orderQty, setOrderQty] = useState(1);
@@ -111,10 +63,12 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
   const [slPrice, setSlPrice] = useState('');
   const [tpPrice, setTpPrice] = useState('');
   const [gttSubOption, setGttSubOption] = useState<string>('LIMIT');
-  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
+  // Balance comes from the global BalanceDataProvider — no local fetch needed
+  const { balance: availableBalance } = useBalance();
   const [toast, setToast] = useState<string | null>(null);
   const [errorModalMsg, setErrorModalMsg] = useState<string | null>(null);
   const [orderError, setOrderError] = useState<string | null>(null);
+  const [qtyError, setQtyError] = useState<string | null>(null);
   const isExpired = useMemo(() => {
     if (!item?.expiry || exitMode || isModify) return false;
     const expiryDate = new Date(item.expiry);
@@ -124,18 +78,33 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     return expiryDate < now;
   }, [item?.expiry, exitMode, isModify]);
 
-  const [segmentSettings, setSegmentSettings] = useState<any[]>([]);
-  const [scriptSettings, setScriptSettings] = useState<{ symbol: string; lot_size: number }[]>([]);
+  const isSpotIndex = useMemo(() => {
+    if (!item) return false;
+    const spotKiteSymbols = [
+      'NSE:NIFTY 50', 'NSE:NIFTY BANK', 'BSE:SENSEX', 'BSE:BANKEX', 
+      'NSE:NIFTY FIN SERVICE', 'NSE:NIFTY MID SELECT', 'NSE:INDIA VIX'
+    ];
+    if (item.kiteSymbol && spotKiteSymbols.includes(item.kiteSymbol.toUpperCase())) return true;
+    
+    const nameUpper = (item.name || '').toUpperCase();
+    if (nameUpper.includes('INDEX') && !nameUpper.includes('FUT') && !nameUpper.includes('CE') && !nameUpper.includes('PE')) return true;
+    
+    return false;
+  }, [item]);
+
+  // getLotSize and getSegment come from the shared TradeConfigProvider
+  const { getLotSize, getSegment } = useTradeConfig();
   const [showCharges, setShowCharges] = useState(false);
 
   const { positions: activePositions, refreshPositions } = useActivePositions();
 
   const isOpen = !!item;
-  const lotSize = (item && (item as any).lot_size && (item as any).lot_size > 0)
-    ? (item as any).lot_size
-    : (item ? getLotSize(item.name, scriptSettings) : 1);
+  const rawLotSize = item ? Number((item as any).lot_size || (item as any).lotSize || 0) : 0;
+  const lotSize = (item && rawLotSize > 0)
+    ? rawLotSize
+    : (item ? getLotSize(item.symbol || item.name || '') : 1);
 
-  const dbSeg = item ? mapSegmentToDbSegment(item.segment, item.symbol) : '';
+  const dbSeg = item ? mapSegmentWithSymbol(item.segment, item.symbol) : '';
   const isCrypto = !!item?.binanceSymbol || ['BTC', 'ETH', 'DOGE', 'SOL', 'XRP', 'ADA', 'BNB', 'DOT', 'LTC', 'AVAX', 'MATIC'].includes(item?.symbol || '');
   const isComex = item && (item as any).preferredView
     ? (item as any).preferredView === 'comex'
@@ -189,10 +158,15 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     currentLtp = marketQuotes[computedKiteSymbol].lastPrice;
     currentChangePercent = marketQuotes[computedKiteSymbol].changePercent;
   }
+  // Fallback: if still no price and comexSymbol exists, use COMEX USD price
+  if (currentLtp === 0 && item?.comexSymbol && comexQuotes[item.comexSymbol]) {
+    currentLtp = comexQuotes[item.comexSymbol].lastPrice;
+    currentChangePercent = comexQuotes[item.comexSymbol].changePercent;
+  }
 
   const activeSide: 'BUY' | 'SELL' = (side === 'SELL' || side === 'BUY') ? side : 'BUY';
-  const buySetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'BUY');
-  const sellSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'SELL');
+  const buySetting = dbSeg ? getSegment(dbSeg, 'BUY') : undefined;
+  const sellSetting = dbSeg ? getSegment(dbSeg, 'SELL') : undefined;
   const segSetting = side === 'SELL' ? sellSetting : buySetting;
 
   const buyEntryBuffer = buySetting ? buySetting.entry_buffer : 0;
@@ -215,6 +189,18 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     } else if (computedKiteSymbol && marketQuotes[computedKiteSymbol]) {
       rawBid = marketQuotes[computedKiteSymbol].bid || currentLtp;
       rawAsk = marketQuotes[computedKiteSymbol].ask || currentLtp;
+    }
+
+    // Use real bid/ask from the exchange if valid (non-zero and bid < ask).
+    // Only fall back to a tight synthetic spread when prices are missing or crossed.
+    if (currentLtp > 0) {
+      const defaultBid = currentLtp * 0.9995;
+      const defaultAsk = currentLtp * 1.0005;
+      const hasValidSpread = rawBid > 0 && rawAsk > 0 && rawBid < rawAsk;
+      if (!hasValidSpread) {
+        rawBid = defaultBid;
+        rawAsk = defaultAsk;
+      }
     }
 
     if (exitMode) {
@@ -251,6 +237,10 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
   };
   const targetPT = propProductType || productType;
   const existingPos = activePositions.find(p => p.symbol === item?.symbol && ((p.status as string) === 'open' || (p.status as string) === 'OPEN') && p.product_type === targetPT);
+  // Total qty across all open lots for this symbol+product_type (for multi-lot exit validation)
+  const totalOpenQtyForSymbol = activePositions
+    .filter(p => p.symbol === item?.symbol && ((p.status as string) === 'open' || (p.status as string) === 'OPEN') && p.product_type === targetPT && p.side === existingPos?.side)
+    .reduce((sum, p) => sum + (Number(p.qty_open) || 0), 0);
   const hasSellPos = existingPos?.side === 'SELL' || false;
   const hasBuyPos = existingPos?.side === 'BUY' || false;
 
@@ -282,16 +272,30 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     segSetting.gtt_commission_value ?? 10
   ) : (orderType === 'GTT' ? computeCharge('Per Trade', 15) : 0));
 
+  // Brokerage model (matches TradeEngine):
+  //   INTRADAY open: entry + exit charged upfront = rawIntradayCharge × 2
+  //   CARRY open:    entry + exit + carry conversion = rawIntradayCharge × 2 + rawCarryCharge
+  //   Exit order:    0 (already collected at open)
+  //   GTT:           shows both legs breakdown
+
   let displayIntraday = 0;
   let displayCarry = 0;
 
-  if (orderType === 'GTT') {
+  if (isExitTrade) {
+    // Exit: brokerage was already collected at position open — show ₹0
+    displayIntraday = 0;
+    displayCarry = 0;
+  } else if (orderType === 'GTT') {
     displayIntraday = rawIntradayCharge;
     displayCarry = rawCarryCharge;
   } else if (targetPT === 'CARRY') {
+    // CARRY open: only carry conversion brokerage is shown
+    displayIntraday = 0;
     displayCarry = rawCarryCharge;
   } else {
-    displayIntraday = rawIntradayCharge;
+    // INTRADAY open: entry+exit both charged upfront (×2)
+    displayIntraday = rawIntradayCharge * 2;
+    displayCarry = 0;
   }
 
   const calculatedBrokerage = displayIntraday + displayCarry + gttCharge;
@@ -329,17 +333,26 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
   const handleQtyChange = (val: string) => {
     // Allow digits, a leading optional zero, and a single decimal point
     if (val !== '' && !/^\d*\.?\d*$/.test(val)) return;
+
+    // If lotSize > 1, prevent decimals in LOT mode to avoid confusion
+    if (orderUnit === 'lot' && lotSize > 1 && val.includes('.')) return;
+
     userHasEditedQty.current = true;
     setQtyInput(val);
+    if (qtyError) setQtyError(null);
     const n = parseFloat(val);
     // Only update the committed qty when we have a real positive number
     if (!isNaN(n) && n > 0) setOrderQty(n);
   };
 
-  // Stepper: lot mode steps by 0.1, qty mode steps by lotSize
   const stepQty = (delta: number) => {
-    const step = orderUnit === 'lot' ? 0.1 : lotSize;
-    const next = Math.max(step, parseFloat((orderQty + delta * step).toFixed(2)));
+    if (qtyError) setQtyError(null);
+    const step = orderUnit === 'lot' ? 1 : 1;
+    const maxOrderLot = segSetting?.max_order_lot ?? segSetting?.max_lot ?? 0;
+    const maxVal = maxOrderLot > 0
+      ? (orderUnit === 'lot' ? maxOrderLot : maxOrderLot * lotSize)
+      : Infinity;
+    const next = Math.min(maxVal, Math.max(0.0001, parseFloat((orderQty + delta * step).toFixed(4))));
     setOrderQty(next);
     setQtyInput(String(next));
   };
@@ -370,9 +383,8 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
           setGttSubOption(exitMode ? 'TARGET' : 'LIMIT');
         }
       } else {
-        const ls = getLotSize(item.name, scriptSettings);
-        setOrderQty(ls);
-        setQtyInput(String(ls));
+        setOrderQty(lotSize);
+        setQtyInput(String(lotSize));
         setOrderUnit('qty');
         setOrderType('MARKET');
         setProductType(propProductType || 'INTRADAY');
@@ -406,6 +418,7 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
       }
 
       if (initialExitQty > 0 && !userHasEditedQty.current) {
+        setOrderUnit('qty');
         setOrderQty(initialExitQty);
         setQtyInput(String(initialExitQty));
       }
@@ -415,46 +428,10 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [side, isOpen, item?.symbol, propProductType, exitMode, linkedPosId]);
 
-  // Fetch balance, active positions, and segment settings
+  // Fetch balance and refresh active positions when the sheet opens
   useEffect(() => {
     if (!isOpen) return;
     refreshPositions();
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const token = session?.access_token;
-      if (!token) return;
-
-      // Fetch balance
-      fetch('/api/pay/balance', {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then(r => r.json())
-        .then(data => { if (typeof data.balance === 'number') setAvailableBalance(data.balance); })
-        .catch(() => { });
-
-      // Fetch segment settings and script settings in parallel
-      try {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('trading_mode')
-          .eq('id', session.user.id)
-          .single();
-        const mode = profile?.trading_mode || 'normal';
-        const [segRes, scriptRes] = await Promise.all([
-          fetch(`/api/user/segments?mode=${mode}`, { headers: { Authorization: `Bearer ${token}` } }),
-          fetch('/api/user/script-settings', { headers: { Authorization: `Bearer ${token}` } }),
-        ]);
-        if (segRes.ok) {
-          const sData = await segRes.json();
-          setSegmentSettings(sData || []);
-        }
-        if (scriptRes.ok) {
-          const ssData = await scriptRes.json();
-          setScriptSettings(ssData || []);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    });
   }, [isOpen, refreshPositions]);
 
   const showToast = (msg: string) => {
@@ -466,12 +443,43 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
 
   const topLimit = segSetting?.top_limit ?? 0;
   const minLimit = segSetting?.min_limit ?? 0;
-  const maxAllowedPrice = currentLtp * (1 + topLimit / 100);
-  const minAllowedPrice = minLimit > 0 ? currentLtp * (1 - minLimit / 100) : 0;
+  
+  let maxAllowedPrice = topLimit > 0 ? currentLtp * (1 + topLimit / 100) : Infinity;
+  let minAllowedPrice = minLimit > 0 ? currentLtp * (1 - minLimit / 100) : 0;
+
+  if (orderType === 'LIMIT' || orderType === 'TARGET' || (orderType === 'GTT' && !exitMode)) {
+    if (side === 'BUY') {
+      maxAllowedPrice = Math.min(maxAllowedPrice, currentLtp);
+    } else if (side === 'SELL') {
+      minAllowedPrice = Math.max(minAllowedPrice, currentLtp);
+    }
+  }
+
+  // For SLM: the stop loss must be on the correct side of current market price
+  // BUY SLM entry → stop loss below market (protect a new long)
+  // SELL SLM entry → stop loss above market (protect a new short)
+  if (orderType === 'SLM' && !exitMode) {
+    if (side === 'BUY') {
+      maxAllowedPrice = Math.min(maxAllowedPrice, currentLtp);
+    } else if (side === 'SELL') {
+      minAllowedPrice = Math.max(minAllowedPrice, currentLtp);
+    }
+  }
+
+  // Exit mode specific logic for Stop Loss (SL)
+  // Exiting a long (SELL SL): stop loss must be placed BELOW market
+  // Exiting a short (BUY SL): stop loss must be placed ABOVE market
+  if ((orderType === 'SL' || orderType === 'SLM') && exitMode) {
+    if (side === 'BUY') {
+      minAllowedPrice = Math.max(minAllowedPrice, currentLtp);
+    } else if (side === 'SELL') {
+      maxAllowedPrice = Math.min(maxAllowedPrice, currentLtp);
+    }
+  }
 
   const priceRangeHelp = currentLtp > 0 ? (
     <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary, #6B7280)', marginTop: '6px', fontWeight: 600 }}>
-      Allowed price: {minLimit > 0 ? `₹${minAllowedPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'} to {topLimit > 0 ? `₹${maxAllowedPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'No Limit'}
+      Allowed price: {minAllowedPrice > 0 ? `₹${minAllowedPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '₹0.00'} to {maxAllowedPrice !== Infinity ? `₹${maxAllowedPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'No Limit'}
     </div>
   ) : null;
 
@@ -480,21 +488,56 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
   const handlePlace = async (placeSide: 'BUY' | 'SELL') => {
     if (isExecutingRef.current) return;
     isExecutingRef.current = true;
+    let handedOffToOrderFlow = false;
     try {
-      showToast('Executing handlePlace');
       if (!item) return;
 
-      // Parse qty fresh from the input string at submit time — avoids stale state issues
       const parsedInputQty = parseFloat(qtyInput);
       if (isNaN(parsedInputQty) || parsedInputQty <= 0) {
         showToast('Please enter a valid quantity.');
         return;
       }
 
+      let rawQty = orderUnit === 'lot' ? parsedInputQty * lotSize : parsedInputQty;
+
+      // ── Quantity Snapping & Validation ──────────────────────────────────
+      if (exitMode) {
+        let maxExitQty = 0;
+        if (linkedPosId) {
+          // Specific-position exit: cap to that position's qty_open only
+          const exactPos = activePositionsRef.current?.find(p => p.id === linkedPosId);
+          maxExitQty = exactPos?.qty_open ?? 0;
+        } else if (existingPos) {
+          // General exit: cap to TOTAL qty across all open lots for this symbol
+          maxExitQty = totalOpenQtyForSymbol || existingPos.qty_open;
+        }
+        if (maxExitQty > 0 && rawQty > maxExitQty) {
+          showToast(`Exit quantity cannot exceed open position (${maxExitQty} qty). Corrected to maximum.`);
+          rawQty = maxExitQty;
+          setQtyInput(String(orderUnit === 'lot' ? maxExitQty / lotSize : maxExitQty));
+          setOrderQty(orderUnit === 'lot' ? maxExitQty / lotSize : maxExitQty);
+        }
+      } else {
+        const placeSetting = dbSeg ? getSegment(dbSeg, placeSide) : undefined;
+        const maxOrderLot = placeSetting?.max_order_lot ?? placeSetting?.max_lot ?? 0;
+        if (maxOrderLot > 0) {
+          const maxOrderQty = maxOrderLot * lotSize;
+          if (rawQty > maxOrderQty) {
+            setQtyError(`Exceeds max limit of ${maxOrderLot} lots (${maxOrderQty} qty)`);
+            showToast(`Order quantity exceeds the maximum limit of ${maxOrderLot} lots (${maxOrderQty} qty).`);
+            return;
+          }
+        }
+      }
+
+      const finalQty = rawQty;
+      const finalLots = finalQty / lotSize;
+
       // Load setting specific to the side being placed
-      const placeSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === placeSide);
+      const placeSetting = dbSeg ? getSegment(dbSeg, placeSide) : undefined;
       const pTopLimit = placeSetting?.top_limit ?? 0;
       const pMinLimit = placeSetting?.min_limit ?? 0;
+      // ─────────────────────────────────────────────────────────────────────
 
       // Resolve order_type, trigger_price, stop_loss, target, client_price under the hood
       let resolvedOrderType = orderType;
@@ -732,50 +775,30 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
               : { stop_loss: resolvedStopLoss || null, target: resolvedTarget || null };
 
           try {
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = sessionData.session?.access_token;
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers.Authorization = `Bearer ${token}`;
-
-            const patchRes = await fetch(`/api/positions/${positionId}`, {
-              method: 'PATCH',
-              headers,
-              body: JSON.stringify(updateData),
-            });
-
-            if (!patchRes.ok) {
-              const body = await patchRes.json();
-              showToast(body.error || 'Failed to update position stop loss/target.');
-              return;
-            }
+            await api.patch<unknown>(`/api/positions/${positionId}`, updateData);
 
             showToast('Stop loss/target updated successfully');
             onSuccess?.();
             onClose();
             return;
           } catch (err) {
-            showToast('Failed to update position stop loss/target.');
+            if (err instanceof ApiError) {
+              showToast((err.details as any)?.error || 'Failed to update position stop loss/target.');
+            } else {
+              showToast('Failed to update position stop loss/target.');
+            }
             return;
           }
         } else {
           // User changed the order type (e.g. from Target to Market or SL)
           // Clear the old target or stop loss first so it doesn't linger
           try {
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = sessionData.session?.access_token;
-            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-            if (token) headers.Authorization = `Bearer ${token}`;
-
             let clearData: any = {};
             if (isSl) clearData = { stop_loss: null };
             else if (isTarget) clearData = { target: null };
             else if (isGtt) clearData = { stop_loss: null, target: null };
 
-            await fetch(`/api/positions/${positionId}`, {
-              method: 'PATCH',
-              headers,
-              body: JSON.stringify(clearData),
-            });
+            await api.patch<unknown>(`/api/positions/${positionId}`, clearData);
           } catch (e) {
             console.error('[DEBUG TradeSheet handlePlace] Error clearing old target/SL:', e);
           }
@@ -801,65 +824,152 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
         console.log('[DEBUG TradeSheet handlePlace] Sending PATCH payload:', updateData, 'to /api/positions/', existingPos.id);
 
         try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const token = sessionData.session?.access_token;
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (token) headers.Authorization = `Bearer ${token}`;
-
-          const patchRes = await fetch(`/api/positions/${existingPos.id}`, {
-            method: 'PATCH',
-            headers,
-            body: JSON.stringify(updateData),
-          });
-
-          console.log('[DEBUG TradeSheet handlePlace] PATCH response status:', patchRes.status);
-
-          if (!patchRes.ok) {
-            const body = await patchRes.json();
-            console.error('[DEBUG TradeSheet handlePlace] PATCH failed:', body);
-            showToast(body.error || 'Failed to update position stop loss/target.');
-            return;
-          }
+          await api.patch<unknown>(`/api/positions/${existingPos.id}`, updateData);
 
           console.log('[DEBUG TradeSheet handlePlace] PATCH successful');
           showToast('Stop loss/target updated successfully');
           onSuccess?.();
-          onClose();
+          handleCloseAnimation();
           return;
         } catch (err) {
           console.error('[DEBUG TradeSheet handlePlace] PATCH exception:', err);
-          showToast('Failed to update position stop loss/target.');
+          if (err instanceof ApiError) {
+            showToast((err.details as any)?.error || 'Failed to update position stop loss/target.');
+          } else {
+            showToast('Failed to update position stop loss/target.');
+          }
           return;
         }
       }
 
-      showToast('Calling placeOrder');
-      const res = await placeOrder({
-        symbol: item.symbol,
-        kite_instrument: computedKiteSymbol || item.symbol,
-        segment: item.segment,
-        side: placeSide,
-        qty: orderUnit === 'lot' ? parsedInputQty * lotSize : parsedInputQty,
-        lots: orderUnit === 'lot' ? parsedInputQty : 0,
-        order_type: resolvedOrderType as any,
-        product_type: exitMode ? (propProductType || 'INTRADAY') : productType,
-        client_price: resolvedClientPrice,
-        trigger_price: resolvedTriggerPrice,
-        stop_loss: resolvedStopLoss,
-        target: resolvedTarget,
-        is_exit: exitMode || (placeSide === 'BUY' && hasSellPos) || (placeSide === 'SELL' && hasBuyPos),
-      });
-      if (res.success) {
-        window.dispatchEvent(new Event('order_placed'));
-        showToast(res.order?.message || `${placeSide} order placed for ${item.symbol}`);
-        onSuccess?.();
-        onClose();
+      if (exitMode) {
+        // Exit mode: show the full-screen overlay and await the order
+        handedOffToOrderFlow = true;
+        window.dispatchEvent(new Event('exit-overlay-start'));
+        handleCloseAnimation(); // Close the TradeSheet immediately so the overlay is visible
+
+        try {
+          const res = await placeOrder({
+            symbol: item.symbol,
+            kite_instrument: computedKiteSymbol || item.symbol,
+            segment: item.segment,
+            side: placeSide,
+            qty: finalQty,
+            lots: finalLots,
+            order_type: resolvedOrderType as any,
+            product_type: propProductType || 'INTRADAY',
+            client_price: resolvedClientPrice,
+            trigger_price: resolvedTriggerPrice,
+            stop_loss: resolvedStopLoss,
+            target: resolvedTarget,
+            is_exit: true,
+          });
+          window.dispatchEvent(new Event('order_placed'));
+          window.dispatchEvent(new Event('position-closed'));
+          if (res.success) {
+            showToast(`${placeSide} order sent for ${item.symbol}`);
+            if (onSuccess) {
+              try {
+                onSuccess();
+              } catch (e) {
+                console.error('onSuccess refresh failed', e);
+              }
+            }
+            setTimeout(() => {
+              window.dispatchEvent(new Event('order_placed'));
+              window.dispatchEvent(new Event('position-closed'));
+            }, 1500);
+          } else {
+            // Fire error event so parent page can show the error modal
+            window.dispatchEvent(new CustomEvent('order_error', { detail: res.error || 'Order failed. Please try again.' }));
+            window.dispatchEvent(new Event('order_failed'));
+          }
+        } catch (err: any) {
+          window.dispatchEvent(new CustomEvent('order_error', { detail: err.message || 'Order failed. Please try again.' }));
+          window.dispatchEvent(new Event('order_failed'));
+        } finally {
+          setTimeout(() => {
+            isExecutingRef.current = false;
+            window.dispatchEvent(new Event('exit-overlay-end'));
+          }, 50);
+        }
       } else {
-        setErrorModalMsg(`Order Failed:\n${res.error}`);
-        showToast(`${res.error}`);
+        // Buy/Sell flow: show the global loader overlay
+        handedOffToOrderFlow = true;
+        window.dispatchEvent(new CustomEvent('global-loader-start', { detail: 'Processing Order...' }));
+        handleCloseAnimation(); // Close the TradeSheet immediately so the overlay is visible
+
+        // Modify flow: cancel the original order first, then re-place with new params
+        if (isModify && modifyingOrderId && !modifyingOrderId.startsWith('pos-')) {
+          try {
+            await api.patch<unknown>(`/api/orders/${modifyingOrderId}`, { status: 'CANCELLED' });
+          } catch (err) {
+            window.dispatchEvent(new CustomEvent('toast_msg', { detail: 'Failed to cancel original order for modify.' }));
+            window.dispatchEvent(new Event('global-loader-end'));
+            isExecutingRef.current = false;
+            return;
+          }
+        }
+
+        // Non-exit: optimistic fire-and-forget for snappy UX
+        const optimisticPayload = {
+          symbol: item.symbol,
+          kite_instrument: computedKiteSymbol || item.symbol,
+          segment: item.segment,
+          side: placeSide,
+          qty: finalQty,
+          client_price: resolvedClientPrice,
+          product_type: productType,
+        };
+        window.dispatchEvent(new Event('order_placed'));
+        window.dispatchEvent(new CustomEvent('order_placed_with_data', { detail: optimisticPayload }));
+        showToast(`${placeSide} order sent for ${item.symbol}`);
+        onSuccess?.();
+
+        placeOrder({
+          symbol: item.symbol,
+          kite_instrument: computedKiteSymbol || item.symbol,
+          segment: item.segment,
+          side: placeSide,
+          qty: finalQty,
+          lots: finalLots,
+          order_type: resolvedOrderType as any,
+          product_type: productType,
+          client_price: resolvedClientPrice,
+          trigger_price: resolvedTriggerPrice,
+          stop_loss: resolvedStopLoss,
+          target: resolvedTarget,
+          is_exit: (placeSide === 'BUY' && hasSellPos) || (placeSide === 'SELL' && hasBuyPos),
+        }).then((res) => {
+          if (!res.success) {
+            window.dispatchEvent(new CustomEvent('order_error', { detail: `${res.error}` }));
+            window.dispatchEvent(new Event('order_failed'));
+          } else {
+            if (onSuccess) {
+              try {
+                onSuccess();
+              } catch (e) {
+                console.error('onSuccess refresh failed', e);
+              }
+            }
+          }
+        }).catch(err => {
+          window.dispatchEvent(new CustomEvent('order_error', { detail: `${err.message}` }));
+          window.dispatchEvent(new Event('order_failed'));
+        }).finally(() => {
+          setTimeout(() => {
+            isExecutingRef.current = false;
+            window.dispatchEvent(new Event('global-loader-end'));
+          }, 50);
+        });
       }
-    } finally {
+    } catch (e) {
       isExecutingRef.current = false;
+    } finally {
+      // Reset the ref for any early validation returns that didn't hand off to an order flow
+      if (!handedOffToOrderFlow) {
+        isExecutingRef.current = false;
+      }
     }
   };
 
@@ -1152,14 +1262,14 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
         }
       `}</style>
 
-      <div id="tradeSheetOverlay" className={`ts2-overlay${isOpen ? ' active' : ''}`} onClick={onClose} />
+      <div id="tradeSheetOverlay" className={`ts2-overlay${(isOpen && !isClosing) ? ' active' : ''}`} onClick={handleCloseAnimation} />
 
-      <div id="tradeSheet" className={`ts2-sheet${isOpen ? ' open' : ''}${exitMode ? ' ts2-exit-mode' : ''} ts2-sheet--${activeSide.toLowerCase()}`}>
+      <div id="tradeSheet" className={`ts2-sheet${(isOpen && !isClosing) ? ' open' : ''}${exitMode ? ' ts2-exit-mode' : ''} ts2-sheet--${activeSide.toLowerCase()}`}>
         {item && (
           <>
             {/* Header */}
             <div className="ts2-header">
-              <button className="ts2-back-btn" onClick={onClose}>
+              <button className="ts2-back-btn" onClick={handleCloseAnimation}>
                 <i className="fas fa-chevron-down" />
               </button>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -1212,11 +1322,26 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                     <div className="ts2-toggle">
                       <button
                         className={`ts2-toggle-opt${orderUnit === 'qty' ? ' active' : ''}`}
-                        onClick={() => { setOrderUnit('qty'); setOrderQty(lotSize); setQtyInput(String(lotSize)); }}
+                        onClick={() => {
+                          if (orderUnit !== 'qty') {
+                            setOrderUnit('qty');
+                            const newQty = orderQty * (lotSize > 0 ? lotSize : 1);
+                            setOrderQty(newQty);
+                            setQtyInput(String(newQty));
+                          }
+                        }}
                       >QTY</button>
                       <button
                         className={`ts2-toggle-opt${orderUnit === 'lot' ? ' active' : ''}`}
-                        onClick={() => { setOrderUnit('lot'); setOrderQty(0.1); setQtyInput('0.1'); }}
+                        onClick={() => {
+                          if (orderUnit !== 'lot') {
+                            setOrderUnit('lot');
+                            const newLots = lotSize > 0 ? (orderQty / lotSize) : orderQty;
+                            const formattedLots = parseFloat(newLots.toFixed(2));
+                            setOrderQty(formattedLots);
+                            setQtyInput(String(formattedLots));
+                          }
+                        }}
                       >LOT</button>
                     </div>
                   </div>
@@ -1231,11 +1356,16 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                     </div>
                     <div className="ts2-info-card">
                       <div className="ts2-ic-label">Max Lots</div>
-                      <div className="ts2-ic-val">{segSetting?.max_lot ?? '--'}</div>
+                      <div className="ts2-ic-val">
+                        {segSetting?.max_order_lot ?? segSetting?.max_lot ?? '--'}
+                        {(segSetting?.max_order_lot ?? segSetting?.max_lot) && lotSize > 1
+                          ? <span style={{ fontSize: '0.7em', color: 'var(--text-secondary)', marginLeft: 3 }}>({(segSetting.max_order_lot ?? segSetting.max_lot) * lotSize} qty)</span>
+                          : null}
+                      </div>
                     </div>
                     <div className="ts2-info-card">
                       <div className="ts2-ic-label">Order Lots</div>
-                      <div className="ts2-ic-val">{segSetting?.max_order_lot ?? '--'}</div>
+                      <div className="ts2-ic-val">{orderUnit === 'lot' ? orderQty : (orderQty / lotSize)}</div>
                     </div>
                     <div className="ts2-info-card">
                       <div className="ts2-ic-label">Total Qty</div>
@@ -1258,14 +1388,22 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                       value={qtyInput}
                       onChange={e => handleQtyChange(e.target.value)}
                       onBlur={() => {
-                        // On blur, if empty or invalid, reset to current orderQty
                         const n = parseFloat(qtyInput);
                         if (!qtyInput || isNaN(n) || n <= 0) {
                           setQtyInput(String(orderQty));
                         } else {
-                          // Normalise display (remove trailing dot like "0.")
-                          setQtyInput(String(n));
-                          setOrderQty(n);
+                          let snapped = n;
+                          if (lotSize > 1) {
+                            if (orderUnit === 'qty') {
+                              // Keep the exact custom quantity entered by the user
+                              snapped = Math.max(0.0001, n);
+                            } else {
+                              // Snap to nearest integer lot
+                              snapped = Math.max(1, Math.round(n));
+                            }
+                          }
+                          setQtyInput(String(snapped));
+                          setOrderQty(snapped);
                         }
                       }}
                     />
@@ -1274,16 +1412,18 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                     </button>
                   </div>
                   <div className="ts2-qty-hint">{orderUnit === 'lot' ? `${orderQty} Lots` : `${orderQty} Qty`}</div>
+                  {qtyError && (
+                    <div style={{ color: '#ef4444', fontSize: '0.68rem', fontWeight: 700, marginTop: '6px', textAlign: 'center' }}>
+                      {qtyError}
+                    </div>
+                  )}
                 </div>
 
                 {/* Order Type */}
                 <div className="ts2-card">
                   <div className="ts2-label">Order Type</div>
                   <div className="ts2-pills">
-                    {(exitMode
-                      ? ['MARKET', 'TARGET', 'SL', 'GTT']
-                      : ['MARKET', 'LIMIT', 'SLM', 'GTT']
-                    ).map(t => (
+                    {(exitMode ? ['MARKET', 'LIMIT', 'SL', 'GTT'] : ['MARKET', 'LIMIT', 'SLM', 'GTT']).map(t => (
                       <button
                         key={t}
                         className={`ts2-pill${orderType === t ? ' active' : ''}`}
@@ -1318,7 +1458,12 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                 {/* SL / SLM — Price input */}
                 {(orderType === 'SL' || orderType === 'SLM') && (
                   <div className="ts2-card">
-                    <div className="ts2-label">Stop Loss Price <span style={{ color: '#9CA3AF', textTransform: 'none', fontWeight: 500 }}>(₹)</span></div>
+                    <div className="ts2-label">
+                      {orderType === 'SLM'
+                        ? <>Stop Loss <span style={{ color: '#9CA3AF', textTransform: 'none', fontWeight: 500 }}>(₹) — order executes at market price</span></>
+                        : <>Stop Loss Price <span style={{ color: '#9CA3AF', textTransform: 'none', fontWeight: 500 }}>(₹)</span></>
+                      }
+                    </div>
                     <input
                       className="ts2-field-input"
                       type="number"
@@ -1326,6 +1471,7 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                       value={triggerPrice}
                       onChange={e => setTriggerPrice(e.target.value)}
                     />
+                    {priceRangeHelp}
                   </div>
                 )}
 
@@ -1345,6 +1491,13 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                               value={slPrice}
                               onChange={e => setSlPrice(e.target.value)}
                             />
+                            {currentLtp > 0 && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary, #6B7280)', marginTop: 4, fontWeight: 600 }}>
+                                {activeSide === 'BUY'
+                                  ? `Below ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : `Above ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              </div>
+                            )}
                           </div>
                           <div style={{ flex: 1 }}>
                             <div className="ts2-label" style={{ marginBottom: 6 }}>Target <span style={{ color: '#9CA3AF', textTransform: 'none', fontWeight: 500 }}>(₹)</span></div>
@@ -1355,6 +1508,13 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                               value={tpPrice}
                               onChange={e => setTpPrice(e.target.value)}
                             />
+                            {currentLtp > 0 && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary, #6B7280)', marginTop: 4, fontWeight: 600 }}>
+                                {activeSide === 'BUY'
+                                  ? `Above ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : `Below ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1371,6 +1531,13 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                               value={slPrice}
                               onChange={e => setSlPrice(e.target.value)}
                             />
+                            {currentLtp > 0 && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary, #6B7280)', marginTop: 4, fontWeight: 600 }}>
+                                {activeSide === 'BUY'
+                                  ? `Below ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : `Above ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              </div>
+                            )}
                           </div>
                           <div style={{ flex: 1 }}>
                             <div className="ts2-label" style={{ marginBottom: 6 }}>Target <span style={{ color: '#9CA3AF', textTransform: 'none', fontWeight: 500 }}>(₹)</span></div>
@@ -1381,6 +1548,13 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                               value={tpPrice}
                               onChange={e => setTpPrice(e.target.value)}
                             />
+                            {currentLtp > 0 && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary, #6B7280)', marginTop: 4, fontWeight: 600 }}>
+                                {activeSide === 'BUY'
+                                  ? `Above ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : `Below ₹${currentLtp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div>
@@ -1416,7 +1590,7 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                   <div className="ts2-margin-row">
                     <span className="ts2-ml">Available</span>
                     <span className="ts2-mv-avail">
-                      {availableBalance !== null ? `₹ ${availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '--'}
+                      {`₹ ${availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                     </span>
                   </div>
                   <div className="ts2-margin-row">
@@ -1446,20 +1620,22 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
                   {showCharges && (
                     <>
                       <div className="ts2-margin-row" style={{ paddingTop: '8px' }}>
-                        <span className="ts2-ml">Intraday Brokerage</span>
-                        <span className="ts2-mv">
-                          ₹ {displayIntraday.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        <span className="ts2-ml">
+                          Intraday Carry
+                        </span>
+                        <span className="ts2-mv" style={displayIntraday > 0 ? {} : { opacity: 0.4 }}>
+                          ₹ {(displayIntraday > 0 ? rawIntradayCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                       <div className="ts2-margin-row">
                         <span className="ts2-ml">Carry Charges</span>
-                        <span className="ts2-mv" style={(targetPT === 'CARRY' || displayCarry > 0) ? { color: '#15803D', fontWeight: 700 } : { opacity: 0.45 }}>
+                        <span className="ts2-mv" style={targetPT === 'CARRY' && !isExitTrade ? { color: '#15803D', fontWeight: 700 } : { opacity: 0.4 }}>
                           ₹ {displayCarry.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                       <div className="ts2-margin-row">
                         <span className="ts2-ml">GTT Charges</span>
-                        <span className="ts2-mv" style={orderType === 'GTT' ? { color: '#15803D', fontWeight: 700 } : { opacity: 0.45 }}>
+                        <span className="ts2-mv" style={orderType === 'GTT' ? { color: '#15803D', fontWeight: 700 } : { opacity: 0.4 }}>
                           ₹ {(orderType === 'GTT' ? gttCharge : 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
@@ -1473,33 +1649,52 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
 
             {/* Footer */}
             <div className="ts2-footer">
-              {isExpired && (
+              {isExpired ? (
                 <div style={{ padding: '8px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: '8px', fontSize: '13px', fontWeight: '500', textAlign: 'center', width: '100%' }}>
                   This instrument has expired.
                 </div>
-              )}
-              <div className="ts2-btn-row">
-                {(side === 'BUY' || side === 'BOTH') && (
-                  <button
-                    className={`ts2-btn${(exitMode || hasSellPos) ? ' ts2-btn-buy' : ' ts2-btn-buy'}`}
-                    disabled={placingOrder || isExpired}
-                    style={isExpired ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                    onClick={() => handlePlace('BUY')}
-                  >
-                    {placingOrder ? 'PLACING...' : isModify ? 'MODIFY' : exitMode ? 'EXIT POSITION' : 'BUY'}
-                  </button>
-                )}
-                {(side === 'SELL' || side === 'BOTH') && (
-                  <button
-                    className="ts2-btn ts2-btn-sell"
-                    disabled={placingOrder || isExpired}
-                    style={isExpired ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                    onClick={() => handlePlace('SELL')}
-                  >
-                    {placingOrder ? 'PLACING...' : isModify ? 'MODIFY' : exitMode ? 'EXIT POSITION' : 'SELL'}
-                  </button>
-                )}
-              </div>
+              ) : isSpotIndex ? (
+                <div style={{ padding: '12px', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: '8px', fontSize: '13.5px', fontWeight: '600', textAlign: 'center', width: '100%', lineHeight: '1.4' }}>
+                  Indices cannot be traded directly.<br/>
+                  <span style={{ fontSize: '12px', fontWeight: '500', opacity: 0.9 }}>Please trade their Futures or Options.</span>
+                </div>
+              ) : null}
+              
+              {!isSpotIndex && (() => {
+                // Button label: show lots when in LOT mode, qty when in QTY mode
+                let actionText: string;
+                if (orderUnit === 'lot') {
+                  const formattedLots = Number.isInteger(orderQty) ? orderQty : orderQty.toFixed(2);
+                  actionText = `${formattedLots} LOT${orderQty !== 1 ? 'S' : ''}`;
+                } else {
+                  actionText = `${orderQty} QTY`;
+                }
+                
+                return (
+                  <div className="ts2-btn-row">
+                    {(side === 'SELL' || side === 'BOTH') && (
+                      <button
+                        className="ts2-btn ts2-btn-sell"
+                        disabled={placingOrder || isExpired}
+                        style={(placingOrder || isExpired) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                        onClick={() => handlePlace('SELL')}
+                      >
+                        {placingOrder ? <AnimatedLoader size="small" /> : isModify ? 'MODIFY' : exitMode ? 'EXIT POSITION' : hideLotText ? 'SELL' : `SELL ${actionText}`}
+                      </button>
+                    )}
+                    {(side === 'BUY' || side === 'BOTH') && (
+                      <button
+                        className={`ts2-btn${(exitMode || hasSellPos) ? ' ts2-btn-buy' : ' ts2-btn-buy'}`}
+                        disabled={placingOrder || isExpired}
+                        style={(placingOrder || isExpired) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                        onClick={() => handlePlace('BUY')}
+                      >
+                        {placingOrder ? <AnimatedLoader size="small" /> : isModify ? 'MODIFY' : exitMode ? 'EXIT POSITION' : hideLotText ? 'BUY' : `BUY ${actionText}`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </>
         )}
@@ -1573,3 +1768,4 @@ export default function TradeSheet({ item, side, onClose, onSuccess, exitMode = 
     </>
   );
 }
+

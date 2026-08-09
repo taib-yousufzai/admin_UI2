@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState, useEffect } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 
@@ -66,14 +66,14 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
       <Toast toast={toast} onDismiss={() => setToast(null)} />
       
       <div className="adm-upd-section-title">Ledger History</div>
-      <p style={{ color: '#8b949e', fontSize: '14px', marginBottom: 20 }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: 20 }}>
         Chronological record of all balance adjustments, deposits, and withdrawals for this user.
       </p>
 
-      <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' }}>
         <table className="adm-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ background: '#21262d', color: '#8b949e', fontSize: '12px', textAlign: 'left' }}>
+            <tr style={{ background: '#f3f4f6', color: '#6b7280', fontSize: '12px', textAlign: 'left' }}>
               <th style={{ padding: '12px 16px', fontWeight: 600 }}>Date & Time</th>
               <th style={{ padding: '12px 16px', fontWeight: 600 }}>Type</th>
               <th style={{ padding: '12px 16px', fontWeight: 600 }}>Remarks</th>
@@ -84,13 +84,13 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} style={{ padding: '30px', textAlign: 'center', color: '#8b949e' }}>
+                <td colSpan={5} style={{ padding: '30px', textAlign: 'center', color: '#6b7280' }}>
                   Loading history...
                 </td>
               </tr>
             ) : entries.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#8b949e' }}>
+                <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>
                   No ledger history found for this user.
                 </td>
               </tr>
@@ -98,25 +98,25 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
               entries.map((entry) => {
                 const isCredit = entry.direction === 'CREDIT';
                 return (
-                  <tr key={entry.id} style={{ borderTop: '1px solid #30363d', fontSize: '13px' }}>
-                    <td style={{ padding: '12px 16px', color: '#c9d1d9', whiteSpace: 'nowrap' }}>
+                  <tr key={entry.id} style={{ borderTop: '1px solid #e5e7eb', fontSize: '13px' }}>
+                    <td style={{ padding: '12px 16px', color: '#374151', whiteSpace: 'nowrap' }}>
                       {formatDate(entry.created_at)}
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <span style={{
-                        background: '#21262d', color: '#8b949e',
+                        background: '#f3f4f6', color: '#6b7280',
                         padding: '2px 8px', borderRadius: 12, fontSize: '11px', fontWeight: 600,
                       }}>
                         {getEntryLabel(entry.entry_type)}
                       </span>
                     </td>
-                    <td style={{ padding: '12px 16px', color: '#8b949e', maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <td style={{ padding: '12px 16px', color: '#6b7280', maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {entry.remarks || '—'}
                     </td>
                     <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: isCredit ? '#10b981' : '#f43f5e' }}>
                       {isCredit ? '+' : '-'} ₹{fmt(entry.amount)}
                     </td>
-                    <td style={{ padding: '12px 16px', textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>
+                    <td style={{ padding: '12px 16px', textAlign: 'right', color: '#111827', fontWeight: 600 }}>
                       {entry.balance_after !== null ? `₹${fmt(entry.balance_after)}` : '—'}
                     </td>
                   </tr>
@@ -130,9 +130,9 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
         {entries.length > 0 && (
           <div style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '12px 16px', borderTop: '1px solid #30363d', background: '#0d1117'
+            padding: '12px 16px', borderTop: '1px solid #e5e7eb', background: '#f9fafb'
           }}>
-            <span style={{ color: '#8b949e', fontSize: '12px' }}>
+            <span style={{ color: '#6b7280', fontSize: '12px' }}>
               Page {page} of {totalPages}
             </span>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -140,7 +140,7 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
                 disabled={page <= 1}
                 onClick={() => setPage(p => p - 1)}
                 style={{
-                  background: 'transparent', border: '1px solid #30363d', color: '#c9d1d9',
+                  background: 'transparent', border: '1px solid #e5e7eb', color: '#374151',
                   padding: '4px 12px', borderRadius: 4, cursor: page <= 1 ? 'not-allowed' : 'pointer',
                   opacity: page <= 1 ? 0.5 : 1, fontSize: '12px'
                 }}
@@ -151,7 +151,7 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
                 disabled={page >= totalPages}
                 onClick={() => setPage(p => p + 1)}
                 style={{
-                  background: '#21262d', border: '1px solid #30363d', color: '#e6edf3',
+                  background: '#f3f4f6', border: '1px solid #e5e7eb', color: '#111827',
                   padding: '4px 12px', borderRadius: 4, cursor: page >= totalPages ? 'not-allowed' : 'pointer',
                   opacity: page >= totalPages ? 0.5 : 1, fontSize: '12px'
                 }}
@@ -165,3 +165,4 @@ export default function LedgerHistory({ selectedUser }: { selectedUser: { id: st
     </div>
   );
 }
+

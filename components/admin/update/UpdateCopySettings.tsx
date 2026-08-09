@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 
@@ -66,7 +66,7 @@ export default function UpdateCopySettings({ selectedUser }: { selectedUser?: { 
   return (
     <div className="adm-upd-root" style={{ padding: '0 0 40px 0' }}>
       <div className="adm-upd-section-title">Copy Segment Settings</div>
-      <p style={{ color: '#8b949e', fontSize: '14px', marginBottom: 20 }}>
+      <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: 20 }}>
         Clone trading rules and segment configurations from an existing user account to a target user account.
       </p>
 
@@ -100,8 +100,8 @@ export default function UpdateCopySettings({ selectedUser }: { selectedUser?: { 
             onClick={handleSelectAll}
             style={{ 
               background: 'transparent', 
-              border: '1px solid #30363d', 
-              color: '#8b949e', 
+              border: '1px solid #e5e7eb', 
+              color: '#6b7280', 
               padding: '6px 12px', 
               borderRadius: '4px',
               fontSize: '12px',
@@ -140,3 +140,4 @@ export default function UpdateCopySettings({ selectedUser }: { selectedUser?: { 
     </div>
   );
 }
+

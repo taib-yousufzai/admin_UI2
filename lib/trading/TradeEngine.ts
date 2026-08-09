@@ -1,0 +1,617 @@
+import { getAdminClient } from '@/lib/adminClient';
+import { fetchBinanceQuote, fetchKiteQuotes, fetchSpeedQuotes } from '../datafeed/MarketDataService';
+import { calculateBufferedPrice } from './BufferCalculator';
+import { calculateMarginPortion } from './MarginCalculator';
+import { calculateSingleLegCharge } from './BrokerageCalculator';
+import { RiskValidation } from './RiskValidation';
+import { OrderService } from './OrderService';
+import { ExecutionService, ExecutionParams } from './ExecutionService';
+import { ConfigurationService } from './ConfigurationService';
+import { mapSegmentToDbSegment, mapSymbolToSegment } from './SymbolMapping';
+import { SymbolNormalizer } from './SymbolNormalizer';
+import { getLotSizeFallback } from '@/lib/lotSize';
+import { parseOptionSymbol } from '../positionStore';
+import { calculateFreeMarginFromPositions } from '@/lib/floatingPnl';
+
+export interface PlaceOrderRequest {
+  symbol: string;
+  kite_instrument: string;
+  segment: string;
+  side: 'BUY' | 'SELL';
+  order_type: 'MARKET' | 'LIMIT' | 'SL' | 'SLM' | 'GTT';
+  product_type: 'INTRADAY' | 'CARRY';
+  qty: number;
+  lots: number;
+  client_price?: number;
+  trigger_price?: number;
+  stop_loss?: number;
+  target?: number;
+  is_exit?: boolean;
+  linked_position_id?: string;
+}
+
+export class TradeEngine {
+  
+  static async placeOrder(user: any, request: PlaceOrderRequest, ipAddress: string) {
+    const admin = getAdminClient();
+    let { symbol, kite_instrument: kiteInst, segment, side, order_type, product_type, qty, lots, client_price, trigger_price, stop_loss, target, is_exit, linked_position_id } = request;
+    
+    is_exit = is_exit === true || (is_exit as any) === 'true';
+    kiteInst = kiteInst || symbol || '';
+    if (side) side = side.toUpperCase();
+
+    let dbSegment = mapSegmentToDbSegment(segment);
+    const symUp = symbol.toUpperCase();
+
+    // 1. Initial Profile Fetch handled entirely within get_trade_context later!
+    // But we need to early exit if no user... Wait, user is already verified by API layer.
+    // Let's just resolve segment first.
+    if (dbSegment === 'CRYPTO' || ['BTC', 'ETH', 'DOGE', 'SOL', 'XRP', 'ADA', 'BNB', 'DOT', 'LTC', 'AVAX', 'MATIC'].some(c => symUp === c || symUp.startsWith(c + 'USDT'))) {
+       dbSegment = 'CRYPTO';
+       const kiUpper = kiteInst.toUpperCase();
+       kiteInst = kiUpper.endsWith('USDT') ? kiUpper : kiUpper + 'USDT';
+       // Keep `symbol` in the same format as stored in DB (e.g. BTCUSDT or BTC)
+    } else if (dbSegment !== 'COMEX' && (symUp.includes('GOLD') || symUp.includes('SILVER') || symUp.includes('CRUDE') || symUp.includes('NATGAS') || symUp.includes('NATURALGAS'))) {
+       dbSegment = (symUp.endsWith('CE') || symUp.endsWith('PE')) ? 'MCX-OPT' : 'MCX-FUT';
+     } else if (!dbSegment) {
+       // Only fallback if not mapped from UI segment
+       dbSegment = mapSymbolToSegment(symbol);
+    }
+
+    // Determine segments for market hours
+    const segUpper = dbSegment.toUpperCase();
+    let segmentId = 'nse';
+    if (segUpper.includes('MCX')) segmentId = 'mcx';
+    else if (segUpper.includes('BSE') || segUpper.includes('BFO')) segmentId = 'bse';
+    else if (segUpper.includes('CDS') || segUpper.includes('FOREX')) segmentId = 'forex';
+    else if (segUpper.includes('COMEX')) segmentId = 'comex';
+    else if (segUpper.includes('CRYPTO')) segmentId = 'crypto';
+
+    // ── Resolve kiteInst to a fully-qualified Kite key (EXCHANGE:TRADINGSYMBOL) ──
+    // When exiting from the positions page, the positions table has no
+    // kite_instrument column, so kiteInst falls back to the raw `symbol`
+    // (e.g. "CRUDEOIL_FUT"). We must resolve it to a valid Kite key before
+    // the quote fetch, otherwise the price lookup will fail.
+    if (kiteInst && !kiteInst.includes(':')) {
+      const kiUpper = kiteInst.toUpperCase();
+      if (segUpper.includes('MCX') || segUpper.includes('CDS') || segUpper.includes('FOREX')) {
+        // COMEX/FOREX synthetic symbols like CRUDEOIL_FUT or JPYINR_FUT → strip _FUT and resolve
+        // to the nearest active futures contract
+        const prefix = segUpper.includes('MCX') ? 'MCX' : 'CDS';
+        let baseName = kiUpper;
+        if (baseName.endsWith('_FUT')) baseName = baseName.slice(0, -4);
+        
+        const cacheKey = `nearest_fut_${prefix}_${baseName}`;
+        const { getRedisClient } = require('@/lib/redis');
+        const redis = getRedisClient();
+        
+        let resolvedSymbol = await redis.get(cacheKey);
+        
+        if (!resolvedSymbol) {
+          const { data: nearestFut } = await admin
+            .from('instruments')
+            .select('tradingsymbol, expiry')
+            .eq('name', baseName)
+            .in('instrument_type', ['FUTCOM', 'FUT', 'MAPPED_FUT', 'FUTOPT'])
+            .gte('expiry', new Date().toISOString().split('T')[0])
+            .order('expiry', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+            
+          if (nearestFut?.tradingsymbol) {
+            resolvedSymbol = nearestFut.tradingsymbol;
+            // TTL: min(1 hour, seconds until end of expiry day in IST) so stale contracts never survive rollover
+            let ttl = 3600;
+            if (nearestFut.expiry) {
+              const expiryEndIST = new Date(nearestFut.expiry);
+              expiryEndIST.setUTCHours(18, 30, 0, 0); // midnight IST = 18:30 UTC
+              const secsUntilExpiry = Math.floor((expiryEndIST.getTime() - Date.now()) / 1000);
+              if (secsUntilExpiry > 0) ttl = Math.min(ttl, secsUntilExpiry);
+            }
+            await redis.setex(cacheKey, ttl, resolvedSymbol);
+          }
+        }
+        
+        if (resolvedSymbol) {
+          kiteInst = `${prefix}:${resolvedSymbol}`;
+        } else {
+          kiteInst = `${prefix}:${kiteInst}`;
+        }
+      } else if (segUpper.includes('BSE') || segUpper.includes('BFO')) {
+        kiteInst = `BFO:${kiteInst}`;
+        if (!kiteInst.match(/\d/)) kiteInst = `BSE:${kiUpper}`; // bare index
+      } else if (segUpper.includes('OPT') || segUpper.includes('FUT') || segUpper.includes('NFO')) {
+        kiteInst = `NFO:${kiteInst}`;
+        if (!kiteInst.match(/\d/)) kiteInst = `NSE:${kiUpper}`; // bare index
+      }
+    }
+
+    const isOption = dbSegment.includes('OPT');
+    let underlyingId = 'NSE:NIFTY 50';
+    
+    if (isOption) {
+      const parsed = parseOptionSymbol(symbol);
+      const u = parsed?.underlying || 'NIFTY';
+      
+      if (dbSegment === 'MCX-OPT') {
+        // MCX options underlyings are MCX futures (e.g. CRUDEOIL, GOLD, SILVER)
+        // Try Redis cache for the nearest futures contract
+        let cachedFut: string | null = null;
+        try {
+          const { getRedisClient } = require('@/lib/redis');
+          const redisCl = getRedisClient();
+          cachedFut = await redisCl.get(`nearest_fut_MCX_${u}`);
+        } catch {}
+
+        if (cachedFut) {
+          underlyingId = `MCX:${cachedFut}`;
+        } else {
+          // Fallback: Query the database for the active nearest futures contract
+          const { data: nearestFut } = await admin
+            .from('instruments')
+            .select('tradingsymbol')
+            .eq('name', u)
+            .in('instrument_type', ['FUTCOM', 'FUT', 'MAPPED_FUT', 'FUTOPT'])
+            .gte('expiry', new Date().toISOString().split('T')[0])
+            .order('expiry', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (nearestFut?.tradingsymbol) {
+            underlyingId = `MCX:${nearestFut.tradingsymbol}`;
+            try {
+              const { getRedisClient } = require('@/lib/redis');
+              const redisCl = getRedisClient();
+              await redisCl.setex(`nearest_fut_MCX_${u}`, 3600, nearestFut.tradingsymbol);
+            } catch {}
+          } else {
+            underlyingId = `MCX:${u}`;
+          }
+        }
+      } else if (u === 'BANKNIFTY') underlyingId = 'NSE:NIFTY BANK';
+      else if (u === 'FINNIFTY') underlyingId = 'NSE:NIFTY FIN SERVICE';
+      else if (u === 'SENSEX') underlyingId = 'BSE:SENSEX';
+      else if (u === 'BANKEX') underlyingId = 'BSE:BANKEX';
+      else if (u === 'MIDCPNIFTY') underlyingId = 'NSE:NIFTY MID SELECT';
+      else if (u !== 'NIFTY') underlyingId = `NSE:${u}`;
+    }
+
+    const symbolsToFetch = [
+      dbSegment === 'CRYPTO' ? SymbolNormalizer.normalizeCryptoSymbol(symbol) : symbol,
+      kiteInst,
+      underlyingId
+    ];
+
+    // Single DB Round-Trip for all user context, positions, and instrument settings
+    const [
+      tradeContextResult,
+      marketHoursResult,
+      segmentSettingsResult,
+      quotesMap
+    ] = await Promise.all([
+      admin.rpc('get_trade_context_v1', { p_user_id: user.id, p_symbols: symbolsToFetch }),
+      ConfigurationService.getMarketHours(segmentId),
+      ConfigurationService.getSegmentSettings(dbSegment),
+      (async () => {
+        if (dbSegment === 'CRYPTO') {
+          const q = await fetchBinanceQuote(symbol);
+          if (!q) return {};
+          // Store under both `symbol` (e.g. BTC) and `kiteInst` (e.g. BTCUSDT)
+          // so the price lookup at quotesMap[kiteInst] succeeds
+          const map: Record<string, number> = {
+            [symbol]: q.bid, [`${symbol}_bid`]: q.bid, [`${symbol}_ask`]: q.ask,
+          };
+          if (kiteInst && kiteInst !== symbol) {
+            map[kiteInst] = q.bid;
+            map[`${kiteInst}_bid`] = q.bid;
+            map[`${kiteInst}_ask`] = q.ask;
+          }
+          return map;
+        }
+        const instrumentsToFetch = [kiteInst];
+        if (isOption && underlyingId !== kiteInst) instrumentsToFetch.push(underlyingId);
+        return fetchSpeedQuotes(instrumentsToFetch);
+      })()
+    ]);
+
+    if (tradeContextResult.error) {
+      throw new Error(`Failed to fetch trade context: ${tradeContextResult.error.message}`);
+    }
+
+    const ctx = tradeContextResult.data;
+    const profile = ctx.profile;
+    
+    if (!profile) throw new Error('User profile not found.');
+    if (!profile.active) throw new Error('Account is inactive');
+
+    // Cache the profile balance in Redis asynchronously with a 5-minute TTL for fast-reject
+    try {
+      const { getRedisClient } = require('@/lib/redis');
+      const redis = getRedisClient();
+      redis.set(`balance:${user.id}`, profile.balance.toString(), 'EX', 300).catch(() => {});
+    } catch {}
+
+    // Database segments use format like 'NSE-EQ', 'MCX-FUT', 'CRYPTO'.
+    // TradeEngine segmentId uses short codes: 'nse', 'mcx', 'crypto', etc.
+    // Map each segmentId to the DB segment values that grant access to it.
+    const SEGMENT_MAP: Record<string, string[]> = {
+      nse:    ['NSE-EQ', 'NSE-FUT', 'INDEX-FUT', 'INDEX-OPT', 'STOCK-FUT', 'STOCK-OPT'],
+      mcx:    ['MCX-FUT', 'MCX-OPT'],
+      bse:    ['BSE-EQ', 'BSE-FUT', 'BFO-FUT', 'BFO-OPT'],
+      forex:  ['FOREX', 'CDS-FUT', 'CDS-OPT'],
+      crypto: ['CRYPTO'],
+      comex:  ['COMEX'],
+    };
+    const allowedDbSegments = SEGMENT_MAP[segmentId] ?? [segmentId.toUpperCase()];
+    const userSegments: string[] = profile.segments ?? [];
+    if (!allowedDbSegments.some((s: string) => userSegments.includes(s))) {
+      throw new Error('Segment is not enabled for this account');
+    }
+
+    const openPositions = ctx.open_positions || [];
+    const pendingOrders = ctx.pending_orders || [];
+    const instrumentDetail = ctx.instruments?.find((i: any) => i.tradingsymbol === kiteInst || i.tradingsymbol === symbol);
+    
+    // Fallbacks from script settings if instrument table is missing data
+    // For MCX/options, instruments table often has lot_size=1 (Zerodha placeholder) — treat ≤1 as unreliable
+    const rawInstrumentLotSize = Number(instrumentDetail?.lot_size || 0);
+    const scriptSetting = ctx.script_settings?.find((s: any) => s.symbol === symbol || s.symbol === kiteInst || s.symbol === underlyingId);
+    let symbolLotSize = (rawInstrumentLotSize > 1)
+      ? rawInstrumentLotSize
+      : Number(scriptSetting?.lot_size || getLotSizeFallback(symbol, ctx.script_settings));
+
+    const isBlocked = ctx.is_blocked?.some((b: any) => {
+      const blockedUpper = b.symbol.toUpperCase();
+      const symbolUpper = symbol.toUpperCase();
+      const kiteInstUpper = kiteInst.toUpperCase();
+      const instNameUpper = instrumentDetail?.name?.toUpperCase() || '';
+      
+      const parsed = parseOptionSymbol(symbol);
+      const optionUnderlying = parsed?.underlying?.toUpperCase() || '';
+      
+      const isPrefixMatch = symbolUpper.startsWith(blockedUpper) || 
+                            kiteInstUpper.includes(blockedUpper);
+                            
+      return symbolUpper === blockedUpper || 
+             kiteInstUpper === blockedUpper || 
+             instNameUpper === blockedUpper ||
+             optionUnderlying === blockedUpper ||
+             isPrefixMatch;
+    });
+    
+    if (isBlocked) {
+      throw new Error('Trading Not Allowed In This Script. Please Contact Admin.');
+    }
+    const isCarry = product_type === 'CARRY';
+
+    // Fetch per-user segment settings to get actual commission_type/commission_value.
+    // The global ConfigurationService.getSegmentSettings() returns a different table
+    // (segment-level admin config) and has commission_value = 0.
+    // The real per-user settings are in segment_settings / scalper_segment_settings
+    // filtered by user_id and segment.
+    // Sub-accounts inherit from their parent — use parent_id when present.
+    const tradingMode = profile.trading_mode || 'normal';
+    const settingsTable = tradingMode === 'scalper' ? 'scalper_segment_settings' : 'segment_settings';
+    
+    let { data: userSegRows } = await admin
+      .from(settingsTable)
+      .select('side, trade_allowed, max_lot, max_order_lot, intraday_leverage, holding_leverage, intraday_type, holding_type, commission_type, commission_value, carry_commission_type, carry_commission_value, gtt_commission_type, gtt_commission_value, profit_hold_sec, loss_hold_sec, strike_range, entry_buffer, exit_buffer, top_limit, min_limit')
+      .eq('user_id', user.id)
+      .eq('segment', dbSegment);
+
+    if ((!userSegRows || userSegRows.length === 0) && profile.parent_id) {
+      const { data: parentSegRows } = await admin
+        .from(settingsTable)
+        .select('side, trade_allowed, max_lot, max_order_lot, intraday_leverage, holding_leverage, intraday_type, holding_type, commission_type, commission_value, carry_commission_type, carry_commission_value, gtt_commission_type, gtt_commission_value, profit_hold_sec, loss_hold_sec, strike_range, entry_buffer, exit_buffer, top_limit, min_limit')
+        .eq('user_id', profile.parent_id)
+        .eq('segment', dbSegment);
+      if (parentSegRows && parentSegRows.length > 0) {
+        userSegRows = parentSegRows;
+      }
+    }
+
+    const userBuySetting  = userSegRows?.find((s: any) => s.side === 'BUY')  ?? null;
+    const userSellSetting = userSegRows?.find((s: any) => s.side === 'SELL') ?? null;
+
+    // Merge: user-specific settings take priority over global fallback defaults
+    let buySetting = { side: 'BUY', trade_allowed: true, max_lot: 50, max_order_lot: 50, intraday_leverage: 10, holding_leverage: 10, intraday_type: 'Multiplier', holding_type: 'Multiplier', commission_type: 'Per Crore', commission_value: 0, ...segmentSettingsResult, ...(userBuySetting ?? {}) };
+    let sellSetting = { side: 'SELL', trade_allowed: true, max_lot: 50, max_order_lot: 50, intraday_leverage: 10, holding_leverage: 10, intraday_type: 'Multiplier', holding_type: 'Multiplier', commission_type: 'Per Crore', commission_value: 0, ...segmentSettingsResult, ...(userSellSetting ?? {}) };
+    
+    const segSetting = side === 'BUY' ? buySetting : sellSetting;
+
+    // 1b. Check Instrument Blocked Status again just in case the name logic caught it
+    if (instrumentDetail?.name && isBlocked) {
+      throw new Error('Trading Not Allowed In This Script. Please Contact Admin.');
+    }
+
+    if (segmentId !== 'crypto' && !RiskValidation.validateTradingHours(marketHoursResult)) {
+      throw new Error('market is closed');
+    }
+
+    if (!segSetting || !segSetting.trade_allowed) {
+      throw new Error('Trading Not Allowed In This Script. Please Contact Admin.');
+    }
+
+    // Expiry Check
+    if (!is_exit && !dbSegment.includes('CRYPTO') && instrumentDetail?.expiry) {
+      const expiryDay = new Date(instrumentDetail.expiry);
+      expiryDay.setHours(0,0,0,0);
+      const todayDay = new Date();
+      todayDay.setHours(0,0,0,0);
+      if (expiryDay.getTime() < todayDay.getTime()) {
+        throw new Error('This contract has expired. You cannot open new positions.');
+      }
+    }
+
+    // Lot Size & Quantity Validation
+    if (!symbolLotSize || symbolLotSize <= 0) {
+      throw new Error('Invalid lot size for symbol');
+    }
+
+    if (!RiskValidation.validateLotSize(qty, symbolLotSize)) {
+      throw new Error(`Quantity must be a multiple of lot size (${symbolLotSize})`);
+    }
+
+    const maxQty = Number(segSetting.max_order_lot || 50) * symbolLotSize;
+    if (!is_exit && !RiskValidation.validateFreezeQuantity(qty, maxQty)) {
+      throw new Error(`Order exceeds maximum allowed order limit of ${segSetting.max_order_lot} lots (${maxQty} units)`);
+    }
+
+    // Cumulative Position limit check
+    let totalOpenLots = 0;
+    const ctxScriptSettings = ctx.script_settings || [];
+
+    for (const pos of openPositions) {
+      if (pos.symbol === symbol) {
+        const pLot = Number(
+          ctxScriptSettings.find((s: any) => s.symbol === pos.symbol)?.lot_size
+          || getLotSizeFallback(pos.symbol, dbSegment)
+        );
+        if (pLot > 0) totalOpenLots += Number(pos.qty_open) / pLot;
+      }
+    }
+
+    for (const po of pendingOrders) {
+      if (!po.is_exit && po.symbol === symbol) {
+        const poLot = Number(
+          ctxScriptSettings.find((s: any) => s.symbol === po.symbol)?.lot_size
+          || getLotSizeFallback(po.symbol, dbSegment)
+        );
+        if (poLot > 0) {
+          totalOpenLots += Number(po.lots) > 0
+            ? Number(po.lots)
+            : (Number(po.qty) / poLot);
+        }
+      }
+    }
+    const newOrderLots = qty / symbolLotSize;
+    if (!is_exit && !RiskValidation.validateMaxLotLimit(totalOpenLots + newOrderLots, Number(segSetting.max_lot || 50))) {
+      throw new Error(`Order exceeds maximum position limit of ${segSetting.max_lot} lots for ${symbol}.`);
+    }
+
+    const activePosition = openPositions.find((p: any) => p.symbol === symbol && p.product_type === (product_type || 'INTRADAY'));
+    // DB RPC place_order_v2 natively handles opposite-side netting and splitting.
+    if (activePosition && activePosition.side !== side) {
+      is_exit = true;
+    }
+
+    let kiteLtp = quotesMap[kiteInst] ?? null;
+    let kiteBid = quotesMap[`${kiteInst}_bid`] || kiteLtp;
+    let kiteAsk = quotesMap[`${kiteInst}_ask`] || kiteLtp;
+
+    // Speed cache missed (common for MCX options not streamed by Ticker Daemon).
+    // Fall back: 1) client_price observed by the UI, 2) Kite REST quote.
+    if (!kiteLtp || kiteLtp <= 0) {
+      if (client_price && client_price > 0) {
+        kiteLtp = client_price;
+        kiteBid = client_price;
+        kiteAsk = client_price;
+      } else {
+        // Last resort: one direct Kite REST call
+        try {
+          const restQuotes = await fetchKiteQuotes([kiteInst]);
+          const ltp = restQuotes?.[kiteInst];
+          if (ltp && ltp > 0) {
+            kiteLtp = ltp;
+            kiteBid = restQuotes[`${kiteInst}_bid`] || ltp;
+            kiteAsk = restQuotes[`${kiteInst}_ask`] || ltp;
+          }
+        } catch {}
+      }
+    }
+
+    if (!kiteLtp || kiteLtp <= 0) {
+      throw new Error('Market data unavailable. Execution rejected.');
+    }
+
+    if (isOption) {
+      let underlyingPrice = quotesMap[underlyingId] ?? null;
+      if (!underlyingPrice || underlyingPrice <= 0) {
+        try {
+          const restQuotes = await fetchKiteQuotes([underlyingId]);
+          const ltp = restQuotes?.[underlyingId];
+          if (ltp && ltp > 0) {
+            underlyingPrice = ltp;
+          }
+        } catch {}
+      }
+
+      if (!underlyingPrice || underlyingPrice <= 0) {
+        throw new Error('Underlying market data unavailable. Option execution rejected.');
+      }
+      
+      quotesMap[underlyingId] = underlyingPrice;
+    }
+
+    const clientPriceNum = client_price || 0;
+    const limitErr = OrderService.validateLimitPrice(order_type, side, clientPriceNum, kiteLtp, is_exit);
+    if (limitErr) throw new Error(limitErr);
+
+    const slErr = OrderService.validateStopLoss(order_type, side, trigger_price || null, kiteLtp, is_exit);
+    if (slErr) throw new Error(slErr);
+
+    const targetErr = OrderService.validateTargetAndStopLoss(is_exit, (is_exit && activePosition) ? activePosition.side === 'BUY' : side === 'BUY', target || null, stop_loss || null, kiteLtp, clientPriceNum, ['LIMIT', 'SL', 'GTT'].includes(order_type));
+    if (targetErr) throw new Error(targetErr);
+
+    const limitsErr = OrderService.validateSegmentPriceLimits(order_type, clientPriceNum, kiteLtp, Number(segSetting.top_limit ?? 0), Number(segSetting.min_limit ?? 0));
+    if (limitsErr) throw new Error(limitsErr);
+
+    if (isOption) {
+      const strikeRange = Number(segSetting.strike_range || 0);
+      const parsedOption = parseOptionSymbol(symbol);
+      const orderStrike = parsedOption ? parsedOption.strike : 0;
+      const underlyingPrice = quotesMap[underlyingId];
+
+      if (strikeRange <= 0 && instrumentDetail?.expiry && underlyingPrice > 0 && orderStrike > 0) {
+        const underlyingName = parsedOption?.underlying || symbol;
+        const { data: siblingStrikes } = await admin
+          .from('instruments')
+          .select('strike_price')
+          .eq('name', underlyingName)
+          .eq('expiry', instrumentDetail.expiry)
+          .in('option_type', ['CE', 'PE']);
+
+        if (siblingStrikes && siblingStrikes.length > 0) {
+          const uniqueStrikes = Array.from(new Set(siblingStrikes.map(s => Number(s.strike_price)))).sort((a, b) => a - b);
+          let closestIdx = 0;
+          let minDiff = Infinity;
+          for (let i = 0; i < uniqueStrikes.length; i++) {
+            const diff = Math.abs(uniqueStrikes[i] - underlyingPrice);
+            if (diff < minDiff) {
+              minDiff = diff;
+              closestIdx = i;
+            }
+          }
+
+          const rangeCount = 11;
+          const half = Math.floor(rangeCount / 2);
+          let startIdx = closestIdx - half;
+          let endIdx = closestIdx + half;
+
+          if (startIdx < 0) {
+            endIdx += Math.abs(startIdx);
+            startIdx = 0;
+          }
+          if (endIdx >= uniqueStrikes.length) {
+            const excess = endIdx - (uniqueStrikes.length - 1);
+            startIdx = Math.max(0, startIdx - excess);
+            endIdx = uniqueStrikes.length - 1;
+          }
+
+          const allowedStrikes = uniqueStrikes.slice(startIdx, endIdx + 1);
+          if (!allowedStrikes.includes(orderStrike)) {
+            throw new Error(`Strike price ${orderStrike} is out of range. Allowed range is ${allowedStrikes[0]} to ${allowedStrikes[allowedStrikes.length - 1]}.`);
+          }
+        }
+      } else if (strikeRange > 0) {
+        const strikeErr = OrderService.validateStrikeRange(symbol, isOption, strikeRange, underlyingPrice);
+        if (strikeErr) throw new Error(strikeErr);
+      }
+    }
+
+    const holdErr = OrderService.validateHoldDuration(is_exit, order_type, activePosition, kiteLtp, Number(segSetting.profit_hold_sec ?? 120), Number(segSetting.loss_hold_sec ?? 0));
+    if (holdErr) throw new Error(holdErr);
+
+    const isGTT = order_type === 'GTT';
+    const marginPrice = (order_type === 'LIMIT' || isGTT) ? (clientPriceNum > 0 ? clientPriceNum : kiteLtp) : (trigger_price || kiteLtp);
+    const exposure = qty * marginPrice;
+    
+    const brokerageConfig = await ConfigurationService.getBrokerageConfig(user.id, dbSegment);
+    let marginPortion = 0;
+    
+    let brokerage = 0;
+
+    const isCustomCalc = side === 'BUY' ? buySetting?.use_custom_calc : sellSetting?.use_custom_calc;
+
+    if (!is_exit) {
+      marginPortion = calculateMarginPortion({
+        segment: dbSegment,
+        side,
+        leverageType: isCarry ? (segSetting.holding_type ?? 'Multiplier') : (segSetting.intraday_type ?? 'Multiplier'),
+        leverage: isCarry ? (segSetting.holding_leverage ?? 10) : (segSetting.intraday_leverage ?? 10),
+        totalQty: qty,
+        lotSize: symbolLotSize,
+        baseExposure: exposure
+      });
+
+      // Brokerage logic:
+      //   - Entry brokerage + exit brokerage are both charged at position open time (× 2)
+      //   - No brokerage is charged again when the position is closed
+      //   - Carry brokerage is separate and charged at INTRADAY → CARRY conversion
+      const commType = segSetting.intraday_commission_type || segSetting.commission_type || 'Per Crore';
+      const commVal = Number(segSetting.intraday_commission_value ?? segSetting.commission_value ?? 0);
+      const singleLeg = calculateSingleLegCharge({ exposure, lots: newOrderLots, commissionType: commType, commissionValue: commVal });
+      brokerage = Math.round(singleLeg * 2 * 100) / 100; // both legs up front
+    } else {
+      // Exit order: brokerage was already collected at position open — charge nothing
+      brokerage = 0;
+    }
+
+    if (dbSegment === 'CRYPTO' && isCustomCalc) {
+      brokerage = 0; // custom calc zeroes out separate brokerage
+    }
+
+    const requiredMargin = marginPortion + brokerage;
+
+    // Validation is delegated to database RPC place_order_v2
+
+
+    // 4. Execution Price Calculation (BufferCalculator)
+    
+    // Normalize custom calculation base price (bid/ask vs ltp)
+    let executionBasePrice = kiteLtp;
+    if (dbSegment === 'CRYPTO' && isCustomCalc) {
+      executionBasePrice = (side === 'BUY' && !is_exit) || (side === 'SELL' && is_exit) ? kiteAsk : kiteBid;
+      brokerage = 0; // Baked into price for custom calc
+    } else {
+      executionBasePrice = (side === 'BUY' && !is_exit) || (side === 'SELL' && is_exit) ? kiteAsk : kiteBid;
+    }
+
+    let fillPrice = calculateBufferedPrice({
+       side,
+       isExit: is_exit,
+       basePrice: ['LIMIT', 'SL', 'GTT'].includes(order_type) ? clientPriceNum : executionBasePrice,
+       buySetting,
+       sellSetting,
+       brokeragePerUnit: (dbSegment === 'CRYPTO' && isCustomCalc && qty > 0) ? (brokerage / qty) : 0
+    });
+
+    fillPrice = Math.max(0.01, Math.round(fillPrice * 100) / 100);
+
+    const isImmediate = order_type === 'MARKET' || order_type === 'SLM';
+
+    // 5. Execute Order (ExecutionService)
+    const executionParams: ExecutionParams = {
+      userId: user.id,
+      symbol,
+      kiteInst,
+      dbSegment,
+      side,
+      orderType: order_type,
+      productType: product_type || 'INTRADAY',
+      qty,
+      lots: newOrderLots,
+      baseLtp: kiteLtp,
+      fillPrice,
+      bufferFee: 0,
+      triggerPrice: trigger_price || null,
+      stopLoss: stop_loss || null,
+      target: target || null,
+      isExit: is_exit,
+      linkedPositionId: linked_position_id,
+      isImmediate,
+      requiredMargin,
+      brokerage
+    };
+
+    const orderId = await ExecutionService.executeOrder(executionParams);
+
+    // 6. Return response to API route
+    return {
+      order_id: orderId,
+      status: isImmediate ? 'EXECUTED' : 'PENDING',
+      fill_price: fillPrice,
+      message: `${side} order placed at ₹${fillPrice.toFixed(2)}`,
+    };
+  }
+}

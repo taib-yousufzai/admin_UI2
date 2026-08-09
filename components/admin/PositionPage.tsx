@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { signOut } from '@/lib/auth';
 import { apiCall, Toast, ToastState, ConfirmDialog, SkeletonLine, Position, PositionItem, positionItemToPosition } from './AdminUtils';
 import { useMarketQuotes } from '@/hooks/useMarketQuotes';
@@ -8,7 +8,10 @@ import { useComexQuotes } from '@/hooks/useComexQuotes';
 export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode }: { selectedUser: { id: string; role: string; client_id?: string }, onOpenUserPanel?: () => void, isDemoMode: boolean }) {
   const [tab, setTab] = useState<'open' | 'closed'>('open');
   const [search, setSearch] = useState('');
-  const [rows, setRows] = useState('10');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [timeframe, setTimeframe] = useState<'daily'|'weekly'|'monthly'|'custom'>('daily');
+  const [rows, setRows] = useState('50');
   const [page, setPage] = useState(1);
   const [positions, setPositions] = useState<Position[]>([]);
   const [posLoading, setPosLoading] = useState(false);
@@ -16,6 +19,8 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [editPos, setEditPos] = useState<Position | null>(null);
+  
+  // Edit states
   const [editSl, setEditSl] = useState('');
   const [editTp, setEditTp] = useState('');
   const [editQtyOpen, setEditQtyOpen] = useState('');
@@ -26,14 +31,55 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
   const [editSettlement, setEditSettlement] = useState('');
   const [editStatus, setEditStatus] = useState<'open' | 'active' | 'closed'>('open');
   const [editSide, setEditSide] = useState<'BUY' | 'SELL'>('BUY');
+  
   const [weeklyPnl, setWeeklyPnl] = useState<number>(0);
+  
+  // View states
+  const [viewMode, setViewMode] = useState<'user' | 'global'>('user');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [usersList, setUsersList] = useState<{ id: string; role: string; full_name?: string }[]>([]);
+  const [userSearch, setUserSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [collapsedUsers, setCollapsedUsers] = useState<Record<string, boolean>>({});
+  const [refreshKey, setRefreshKey] = useState(0);
 
+  const exportRef = useRef<HTMLDivElement>(null);
   const uid = selectedUser.id;
+  const isGlobal = viewMode === 'global';
+
+  // Close export dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Fetch users for filter overlay
+  useEffect(() => {
+    apiCall(`/api/admin/users?demo=${isDemoMode}`, { method: 'GET' }).then(({ ok, data }) => {
+      if (ok && Array.isArray(data)) {
+        setUsersList(data as { id: string; role: string; full_name?: string; weeklyPnl?: number }[]);
+        if (!uid) {
+          setWeeklyPnl(data.reduce((sum, u) => sum + (u.weeklyPnl || 0), 0));
+        } else {
+          const u = data.find(x => x.id === uid);
+          if (u && typeof u.weeklyPnl === 'number') setWeeklyPnl(u.weeklyPnl);
+        }
+      }
+    });
+  }, [uid, isDemoMode]);
 
   const fetchPositions = useCallback((silent = false) => {
-    const endpointId = uid || 'all';
+    const endpointId = isGlobal ? 'all' : (uid || 'all');
     if (!silent) setPosLoading(true);
-    apiCall(`/api/admin/users/${endpointId}/positions?tab=${encodeURIComponent(tab)}&rows=100000&demo=${isDemoMode}`, { method: 'GET' })
+    let url = `/api/admin/users/${endpointId}/positions?tab=${encodeURIComponent(tab)}&rows=100000&demo=${isDemoMode}`;
+    if (startDate) url += `&start_date=${encodeURIComponent(startDate)}`;
+    if (endDate) url += `&end_date=${encodeURIComponent(endDate)}`;
+    
+    apiCall(url, { method: 'GET' })
       .then(({ ok, status, data }) => {
         if (status === 401) { signOut(); return; }
         if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
@@ -42,14 +88,17 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
         setPositions(items.map(positionItemToPosition));
       })
       .catch((err: unknown) => {
-        setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
+        if (!silent) setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
       })
-      .finally(() => setPosLoading(false));
-  }, [uid, tab, isDemoMode]);
+      .finally(() => {
+        if (!silent) setPosLoading(false);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, tab, isDemoMode, startDate, endDate, isGlobal, refreshKey]);
 
   useEffect(() => {
     fetchPositions();
-  }, [uid, tab, isDemoMode]);
+  }, [fetchPositions]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -58,37 +107,25 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
     return () => clearInterval(interval);
   }, [fetchPositions]);
 
-  useEffect(() => {
-    apiCall(`/api/admin/users?demo=${isDemoMode}`, { method: 'GET' }).then(({ ok, data }) => {
-      if (ok && Array.isArray(data)) {
-        if (!uid) {
-          const totalWeekly = data.reduce((sum, u) => sum + (u.weeklyPnl || 0), 0);
-          setWeeklyPnl(totalWeekly);
-        } else {
-          const u = data.find(x => x.id === uid);
-          if (u && typeof u.weeklyPnl === 'number') {
-            setWeeklyPnl(u.weeklyPnl);
-          }
-        }
-      }
-    });
-  }, [uid, isDemoMode]);
-
   // Smartly resolve Kite instrument prefixes if they are missing
-  const resolveKitePrefix = useCallback((key: string, settlement: string) => {
-    if (key.includes(':')) return key;
-    const seg = (settlement || '').toUpperCase();
+  const resolveKitePrefix = useCallback((key: string, settlementType: string) => {
+    let baseKey = key;
+    if (baseKey.includes(':')) {
+      baseKey = baseKey.split(':').slice(1).join(':'); // Strip existing prefix
+    }
+    const seg = (settlementType || '').toUpperCase();
     let prefix = 'NSE:';
-    if (seg.includes('MCX')) prefix = 'MCX:';
-    else if (seg.includes('CDS') || seg.includes('FOREX')) prefix = 'CDS:';
-    else if (seg.includes('OPT') || seg.includes('FUT') || seg.includes('NFO')) prefix = 'NFO:';
+    if (baseKey.startsWith('SENSEX') || baseKey.startsWith('BANKEX')) prefix = 'BFO:';
+    else if (seg.includes('MCX') || baseKey.match(/^(CRUDEOIL|NATGAS|SILVER|GOLD|COPPER|ZINC|ALUMINIUM|LEAD|MENTHAOIL)/)) prefix = 'MCX:';
+    else if (seg.includes('NCO')) prefix = 'NCO:';
+    else if (seg.includes('CDS') || seg.includes('FOREX') || baseKey.match(/^(USDINR|EURINR|GBPINR|JPYINR)/)) prefix = 'CDS:';
     else if (seg.includes('BSE') || seg.includes('BFO')) prefix = 'BFO:';
-    else if (key.startsWith('SENSEX') || key.startsWith('BANKEX')) prefix = 'BFO:';
+    else if (seg.includes('OPT') || seg.includes('FUT') || seg.includes('NFO')) prefix = 'NFO:';
 
-    if (prefix === 'BFO:' && !key.match(/\d/)) prefix = 'BSE:';
-    if (prefix === 'NFO:' && !key.match(/\d/)) prefix = 'NSE:';
+    if (prefix === 'BFO:' && !baseKey.match(/\d/)) prefix = 'BSE:';
+    if (prefix === 'NFO:' && !baseKey.match(/\d/)) prefix = 'NSE:';
 
-    return `${prefix}${key}`;
+    return `${prefix}${baseKey}`;
   }, []);
 
   // Group instrument keys to subscribe to quotes
@@ -109,7 +146,6 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
         kite.push(resolveKitePrefix(p.symbol, p.settlement || ''));
       }
     });
-
     return { kiteKeys: kite, binanceKeys: binance, comexKeys: comex };
   }, [positions, resolveKitePrefix]);
 
@@ -137,32 +173,62 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
       const qtyOpen = Number(p.qty.split('/')[0]) || 0;
       let livePnl = p.pnl;
       if (qtyOpen > 0) {
-        if (p.side === 'BUY') {
-          livePnl = (liveLtp - p.avgPrice) * qtyOpen;
-        } else {
-          livePnl = (p.avgPrice - liveLtp) * qtyOpen;
-        }
+        if (p.side === 'BUY') livePnl = (liveLtp - p.avgPrice) * qtyOpen;
+        else livePnl = (p.avgPrice - liveLtp) * qtyOpen;
       }
-
       return { ...p, ltp: liveLtp, pnl: livePnl };
     });
   }, [positions, marketQuotes, comexQuotes, resolveKitePrefix]);
 
-  const openPnl = enrichedPositions.reduce((s, p) => s + (p.status === 'open' || p.status === 'active' ? p.pnl : 0), 0);
-  const totalSettlement = enrichedPositions.reduce((s, p) => s + (p.settlementAmount ?? 0), 0);
-
+  // Derived calculations
   const filtered = enrichedPositions.filter(p =>
     p.symbol.toLowerCase().includes(search.toLowerCase()) ||
     (p.client_id || '').toLowerCase().includes(search.toLowerCase()) ||
     (p.user_name || '').toLowerCase().includes(search.toLowerCase()) ||
     (p.user_id || '').toLowerCase().includes(search.toLowerCase())
   );
+
+  const openPnl = filtered.reduce((s, p) => s + (p.status === 'open' || p.status === 'active' ? (p.pnl || 0) : 0), 0);
+  const closedPnl = filtered.reduce((s, p) => s + (p.status === 'closed' ? (p.pnl || 0) : 0), 0);
+  const ledger = filtered.reduce((s, p) => s + (p.pnl || 0), 0);
+
   const rowsNum = Number(rows);
   const totalPages = Math.max(1, Math.ceil(filtered.length / rowsNum));
   const displayed = filtered.slice((page - 1) * rowsNum, page * rowsNum);
 
-  const switchTab = (t: 'open' | 'closed') => { setTab(t); setSearch(''); setPage(1); };
+  // Users Filter logic
+  const filteredUsers = usersList.filter(u => {
+    const matchRole = roleFilter === 'all' || u.role === roleFilter;
+    const matchSearch = !userSearch || u.id.toLowerCase().includes(userSearch.toLowerCase()) || (u.full_name || '').toLowerCase().includes(userSearch.toLowerCase());
+    return matchRole && matchSearch;
+  });
 
+  // Grouped user view
+  const groupedByUser: Record<string, Position[]> = {};
+  displayed.forEach(p => {
+    const key = p.user_name || p.user_id || 'Unknown';
+    if (!groupedByUser[key]) groupedByUser[key] = [];
+    groupedByUser[key].push(p);
+  });
+
+  // Export
+  const exportToCsv = () => {
+    const headers = ['Symbol', 'User', 'Side', 'Status', 'Qty', 'Entry', 'LTP/Exit', 'P&L', 'Time'];
+    const r = filtered.map(o => [
+      o.symbol, o.user_id, o.side, o.status, o.qty, o.avgPrice.toFixed(2), 
+      o.status === 'closed' ? (o.exit || 0).toFixed(2) : (o.ltp || 0).toFixed(2),
+      (o.pnl || 0).toFixed(2), o.created_at || ''
+    ]);
+    const csv = [headers, ...r].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `positions-${tab}-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  };
+
+  // Actions
   const handleSqoff = (posId: string) => {
     apiCall(`/api/admin/positions/${posId}/sqoff`, { method: 'POST' })
       .then(({ ok, status }) => {
@@ -172,23 +238,58 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
         setToast({ message: 'Square off successful', type: 'success' });
         fetchPositions();
       })
-      .catch((err: unknown) => {
-        setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
-      });
+      .catch((err: unknown) => setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' }));
   };
 
   const handleReopen = (pos: Position) => {
-    apiCall(`/api/admin/positions/${pos.id}/reopen`, {
-      method: 'POST',
+    apiCall(`/api/admin/positions/${pos.id}/reopen`, { method: 'POST' })
+      .then(({ ok, status }) => {
+        if (status === 401) { signOut(); return; }
+        if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
+        if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
+        setToast({ message: 'Position reopened successfully', type: 'success' });
+        fetchPositions();
+      })
+      .catch((err: unknown) => setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' }));
+  };
+
+  const handleDelete = () => {
+    if (!confirmDeleteId) return;
+    setDeleteLoading(true);
+    apiCall(`/api/admin/positions/${confirmDeleteId}`, { method: 'DELETE' })
+      .then(({ ok, status }) => {
+        if (status === 401) { signOut(); return; }
+        if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
+        if (!ok) { setToast({ message: 'Failed to delete position', type: 'error' }); return; }
+        setToast({ message: 'Position deleted successfully', type: 'success' });
+        fetchPositions();
+      })
+      .catch(() => setToast({ message: 'Network error', type: 'error' }))
+      .finally(() => {
+        setDeleteLoading(false);
+        setConfirmDeleteId(null);
+      });
+  };
+
+  const saveEdit = () => {
+    if (!editPos) return;
+    apiCall(`/api/admin/positions/${editPos.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        sl: editSl, tp: editTp,
+        qtyOpen: editQtyOpen, qtyTotal: editQtyTotal,
+        avgPrice: editAvgPrice, exitPrice: editExitPrice,
+        brokerage: editBrokerage, settlement: editSettlement,
+        status: editStatus, side: editSide
+      })
     }).then(({ ok, status }) => {
       if (status === 401) { signOut(); return; }
       if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
-      if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
-      setToast({ message: 'Position reopened successfully', type: 'success' });
+      if (!ok) { setToast({ message: 'Failed to update position', type: 'error' }); return; }
+      setToast({ message: 'Position updated successfully', type: 'success' });
+      setEditPos(null);
       fetchPositions();
-    }).catch((err: unknown) => {
-      setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
-    });
+    }).catch(() => setToast({ message: 'Network error', type: 'error' }));
   };
 
   const openEdit = (p: Position) => {
@@ -205,557 +306,438 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
     setEditSide(p.side as 'BUY' | 'SELL');
   };
 
-  const handleEdit = () => {
-    if (!editPos?.id) return;
-    const body: Record<string, unknown> = {};
-    body.status = editStatus;
-    body.side = editSide;
-
-    if (editStatus === 'closed') {
-      body.avg_price = Number(editAvgPrice);
-      body.exit_price = editExitPrice !== '' ? Number(editExitPrice) : null;
-      body.qty_total = Number(editQtyTotal);
-      body.qty_open = 0;
-      body.brokerage = Number(editBrokerage);
-      body.settlement = editSettlement !== '' ? editSettlement : null;
-    } else {
-      if (editSl !== '') body.sl = Number(editSl);
-      else body.sl = null;
-      if (editTp !== '') body.tp = Number(editTp);
-      else body.tp = null;
-      if (editQtyOpen !== '') body.qty_open = Number(editQtyOpen);
-      if (editQtyTotal !== '') body.qty_total = Number(editQtyTotal);
-      body.avg_price = Number(editAvgPrice);
-      body.brokerage = Number(editBrokerage);
-    }
-
-    apiCall(`/api/admin/positions/${editPos.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }).then(({ ok, status }) => {
-      if (status === 401) { signOut(); return; }
-      if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
-      if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
-      setToast({ message: 'Position updated successfully', type: 'success' });
-      setEditPos(null);
-      fetchPositions();
-    }).catch((err: unknown) => {
-      setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
-    });
+  const getRoleTag = (role: string) => {
+    const map: Record<string, string> = { super_admin: 'super', admin: 'admin', broker: 'broker', sub_broker: 'subbroker', user: 'user', client: 'user' };
+    return map[role] ?? 'user';
   };
 
-  const handleDelete = () => {
-    if (!confirmDeleteId) return;
-    setDeleteLoading(true);
-    apiCall(`/api/admin/positions/${confirmDeleteId}`, { method: 'DELETE' })
-      .then(({ ok, status }) => {
-        if (status === 401) { signOut(); return; }
-        if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
-        if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
-        setToast({ message: 'Position deleted successfully', type: 'success' });
-        setConfirmDeleteId(null);
-        fetchPositions();
-      })
-      .catch((err: unknown) => {
-        setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
-      })
-      .finally(() => setDeleteLoading(false));
-  };
+  const contextLabel = isGlobal ? 'All Platform' : (uid ? `${selectedUser.client_id || uid.slice(0, 8).toUpperCase()}` : 'Select User');
 
   return (
-    <div className="adm-pos-root">
+    <div className="pos-root">
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+
+      {/* Dialogs */}
       {confirmDeleteId && (
         <ConfirmDialog
-          message="Delete this position? This cannot be undone."
+          message="Are you sure you want to delete this position? This action cannot be undone."
           onConfirm={handleDelete}
           onCancel={() => setConfirmDeleteId(null)}
           loading={deleteLoading}
         />
       )}
-      {editPos && (() => {
-        const entry = parseFloat(editAvgPrice) || 0;
-        const exit = parseFloat(editExitPrice) || 0;
-        const qty = parseFloat(editQtyTotal) || 0;
-        const brok = parseFloat(editBrokerage) || 0;
-        const entryValue = entry * qty;
-        const exitValue = exit * qty;
-        const rawPnl = editSide === 'BUY' ? (exit - entry) * qty : (entry - exit) * qty;
-        const netPnl = rawPnl - brok;
-        const isPositive = netPnl >= 0;
-        const entrySideLabel = editSide === 'BUY' ? 'Buy' : 'Sell';
-        const exitSideLabel = editSide === 'BUY' ? 'Sell' : 'Buy';
-        const fmtVal = (v: number) => v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-        // Shared inline styles for the competitor-matching design
-        const labelSm: React.CSSProperties = { fontSize: '0.6rem', fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: '4px' };
-        const inputSm: React.CSSProperties = { fontSize: '0.78rem', padding: '9px 10px', borderRadius: '8px', background: '#0d1117', border: '1px solid #30363d', color: '#e6edf3', width: '100%', boxSizing: 'border-box', fontVariantNumeric: 'tabular-nums' };
-        const readonlyBox: React.CSSProperties = { ...inputSm, background: '#161b22', color: '#8b949e', cursor: 'default', display: 'flex', alignItems: 'center', minHeight: '38px' };
-
-        return (
-        <div className="adm-modal-overlay" onClick={() => setEditPos(null)}>
-          <div className="adm-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#e6edf3' }}>Edit Position</span>
-              <button onClick={() => setEditPos(null)} style={{ background: 'none', border: 'none', color: '#8b949e', fontSize: '1.1rem', cursor: 'pointer', padding: '4px' }}>✕</button>
+      {/* Edit Modal */}
+      {editPos && (
+        <div className="pos-modal-overlay">
+          <div className="pos-modal-box">
+            <h3>Edit Trade <span className="pos-modal-sym">{editPos.symbol}</span></h3>
+            <div className="pos-modal-grid">
+              <div className="pos-form-group">
+                <label>Side</label>
+                <select value={editSide} onChange={e => setEditSide(e.target.value as 'BUY'|'SELL')}>
+                  <option value="BUY">BUY</option>
+                  <option value="SELL">SELL</option>
+                </select>
+              </div>
+              <div className="pos-form-group">
+                <label>Status</label>
+                <select value={editStatus} onChange={e => setEditStatus(e.target.value as any)}>
+                  <option value="open">Open</option>
+                  <option value="active">Active</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+              <div className="pos-form-group">
+                <label>Qty (Open)</label>
+                <input type="number" value={editQtyOpen} onChange={e => setEditQtyOpen(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Qty (Total)</label>
+                <input type="number" value={editQtyTotal} onChange={e => setEditQtyTotal(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Avg Price (Entry)</label>
+                <input type="number" step="0.01" value={editAvgPrice} onChange={e => setEditAvgPrice(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Exit Price</label>
+                <input type="number" step="0.01" value={editExitPrice} onChange={e => setEditExitPrice(e.target.value)} disabled={editStatus !== 'closed'} />
+              </div>
+              <div className="pos-form-group">
+                <label>Stop Loss (SL)</label>
+                <input type="number" step="0.01" value={editSl} onChange={e => setEditSl(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Take Profit (TP)</label>
+                <input type="number" step="0.01" value={editTp} onChange={e => setEditTp(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Brokerage</label>
+                <input type="number" step="0.01" value={editBrokerage} onChange={e => setEditBrokerage(e.target.value)} />
+              </div>
+              <div className="pos-form-group">
+                <label>Settlement Segment</label>
+                <input type="text" value={editSettlement} onChange={e => setEditSettlement(e.target.value)} />
+              </div>
             </div>
-
-            {/* Side dropdown */}
-            <div style={{ marginBottom: '8px' }}>
-              <label style={labelSm}>Side</label>
-              <select
-                value={editSide}
-                onChange={e => setEditSide(e.target.value as any)}
-                style={{ ...inputSm, appearance: 'auto', cursor: 'pointer' }}
-              >
-                <option value="BUY">BUY</option>
-                <option value="SELL">SELL</option>
-              </select>
-            </div>
-
-            {/* Direction hint */}
-            <div style={{ fontSize: '0.65rem', color: '#6e7681', fontWeight: 500, marginBottom: '12px' }}>
-              (Entry = {entrySideLabel}) (Exit = {exitSideLabel})
-            </div>
-
-            {editStatus === 'closed' ? (
-              <>
-                {/* ── Entry Section ── */}
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#e6edf3', marginBottom: '8px' }}>
-                    Entry ({entrySideLabel})
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.65fr 1.1fr', gap: '8px' }}>
-                    <div>
-                      <label style={labelSm}>Price</label>
-                      <input type="number" step="any" value={editAvgPrice} onChange={e => setEditAvgPrice(e.target.value)} style={inputSm} />
-                    </div>
-                    <div>
-                      <label style={labelSm}>Quantity</label>
-                      <input type="number" value={editQtyTotal} onChange={e => setEditQtyTotal(e.target.value)} style={inputSm} />
-                    </div>
-                    <div>
-                      <label style={labelSm}>Value</label>
-                      <div style={readonlyBox}>{fmtVal(entryValue)}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Exit Section ── */}
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#e6edf3', marginBottom: '8px' }}>
-                    Exit ({exitSideLabel})
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.65fr 1.1fr', gap: '8px' }}>
-                    <div>
-                      <label style={labelSm}>Price</label>
-                      <input type="number" step="any" value={editExitPrice} onChange={e => setEditExitPrice(e.target.value)} style={inputSm} />
-                    </div>
-                    <div>
-                      <label style={labelSm}>Quantity <span style={{ fontSize: '0.48rem', color: '#484f58' }}>(auto)</span></label>
-                      <div style={readonlyBox}>{editQtyTotal}</div>
-                    </div>
-                    <div>
-                      <label style={labelSm}>Value</label>
-                      <div style={readonlyBox}>{fmtVal(exitValue)}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Brokerage & Settlement row */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                  <div>
-                    <label style={labelSm}>Brokerage</label>
-                    <input type="number" step="any" value={editBrokerage} onChange={e => setEditBrokerage(e.target.value)} style={inputSm} />
-                  </div>
-                  <div>
-                    <label style={labelSm}>Segment</label>
-                    <input type="text" value={editSettlement} onChange={e => setEditSettlement(e.target.value)} placeholder="e.g. NSE-EQ" style={inputSm} />
-                  </div>
-                </div>
-
-                {/* ── Realized P&L ── */}
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ ...labelSm, marginBottom: '6px' }}>Realized P&L</label>
-                  <div style={{
-                    padding: '14px 16px',
-                    borderRadius: '10px',
-                    border: `1.5px solid ${isPositive ? '#23895540' : '#da363340'}`,
-                    background: isPositive ? 'rgba(35, 134, 54, 0.06)' : 'rgba(218, 54, 51, 0.06)',
-                    textAlign: 'center',
-                    fontSize: '1.35rem',
-                    fontWeight: 800,
-                    fontVariantNumeric: 'tabular-nums',
-                    color: isPositive ? '#3fb950' : '#f85149',
-                    letterSpacing: '-0.3px',
-                  }}>
-                    {netPnl.toFixed(2)}
-                  </div>
-                  {brok > 0 && (
-                    <div style={{ fontSize: '0.65rem', color: '#6e7681', marginTop: '4px', textAlign: 'center' }}>
-                      Gross: {rawPnl >= 0 ? '+' : ''}{rawPnl.toFixed(2)} | Brokerage: -{brok.toFixed(2)}
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Status selection */}
-                <div style={{ marginBottom: '8px' }}>
-                  <label style={labelSm}>Status</label>
-                  <select
-                    value={editStatus === 'active' ? 'open' : editStatus}
-                    onChange={e => setEditStatus(e.target.value as any)}
-                    style={{ ...inputSm, appearance: 'auto', cursor: 'pointer' }}
-                  >
-                    <option value="open">Open</option>
-                    <option value="closed">Closed</option>
-                  </select>
-                </div>
-
-                {/* SL / TP Row */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
-                  <div>
-                    <label style={labelSm}>SL</label>
-                    <input type="number" value={editSl} onChange={e => setEditSl(e.target.value)} placeholder="–" style={inputSm} />
-                  </div>
-                  <div>
-                    <label style={labelSm}>TP</label>
-                    <input type="number" value={editTp} onChange={e => setEditTp(e.target.value)} placeholder="–" style={inputSm} />
-                  </div>
-                </div>
-
-                {/* ── Entry Section ── */}
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#e6edf3', marginBottom: '8px' }}>
-                    Entry ({entrySideLabel})
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.65fr 1.1fr', gap: '8px' }}>
-                    <div>
-                      <label style={labelSm}>Price</label>
-                      <input type="number" step="any" value={editAvgPrice} onChange={e => setEditAvgPrice(e.target.value)} style={inputSm} />
-                    </div>
-                    <div>
-                      <label style={labelSm}>Qty Open</label>
-                      <input type="number" value={editQtyOpen} onChange={e => setEditQtyOpen(e.target.value)} style={inputSm} />
-                    </div>
-                    <div>
-                      <label style={labelSm}>Value</label>
-                      <div style={readonlyBox}>
-                        {fmtVal((parseFloat(editAvgPrice) || 0) * (parseFloat(editQtyOpen) || 0))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Exit Section (LTP) ── */}
-                <div style={{ marginBottom: '14px' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#e6edf3', marginBottom: '8px' }}>
-                    Exit (LTP)
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 0.65fr 1.1fr', gap: '8px' }}>
-                    <div>
-                      <label style={labelSm}>LTP</label>
-                      <div style={readonlyBox}>
-                        {(editPos.ltp ?? editPos.avgPrice ?? 0).toFixed(2)}
-                      </div>
-                    </div>
-                    <div>
-                      <label style={labelSm}>Quantity <span style={{ fontSize: '0.48rem', color: '#484f58' }}>(auto)</span></label>
-                      <div style={readonlyBox}>{editQtyOpen}</div>
-                    </div>
-                    <div>
-                      <label style={labelSm}>Value</label>
-                      <div style={readonlyBox}>
-                        {fmtVal((editPos.ltp ?? editPos.avgPrice ?? 0) * (parseFloat(editQtyOpen) || 0))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Brokerage & Qty Total row */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
-                  <div className="adm-sheet-field" style={{ marginBottom: 0 }}>
-                    <label className="adm-sheet-label">Brokerage</label>
-                    <input className="adm-sheet-input" type="number" step="any" value={editBrokerage} onChange={e => setEditBrokerage(e.target.value)} />
-                  </div>
-                  <div className="adm-sheet-field" style={{ marginBottom: 0 }}>
-                    <label className="adm-sheet-label">Qty Total</label>
-                    <input className="adm-sheet-input" type="number" value={editQtyTotal} onChange={e => setEditQtyTotal(e.target.value)} />
-                  </div>
-                </div>
-
-                {/* ── Active P&L Preview ── */}
-                {(() => {
-                  const entryPrice = parseFloat(editAvgPrice) || 0;
-                  const ltp = editPos.ltp ?? editPos.avgPrice ?? 0;
-                  const qtyOpen = parseFloat(editQtyOpen) || 0;
-                  const brokerage = parseFloat(editBrokerage) || 0;
-                  const rawPnl = editSide === 'BUY'
-                    ? (ltp - entryPrice) * qtyOpen
-                    : (entryPrice - ltp) * qtyOpen;
-                  const netPnl = rawPnl - brokerage;
-                  const isPositive = netPnl >= 0;
-
-                  return (
-                    <div style={{ marginBottom: '16px', marginTop: '6px' }}>
-                      <label style={{ ...labelSm, marginBottom: '6px' }}>Active P&L Preview (Based on LTP)</label>
-                      <div style={{
-                        padding: '14px 16px',
-                        borderRadius: '10px',
-                        border: `1.5px solid ${isPositive ? '#23895540' : '#da363340'}`,
-                        background: isPositive ? 'rgba(35, 134, 54, 0.06)' : 'rgba(218, 54, 51, 0.06)',
-                        textAlign: 'center',
-                        fontSize: '1.35rem',
-                        fontWeight: 800,
-                        fontVariantNumeric: 'tabular-nums',
-                        color: isPositive ? '#3fb950' : '#f85149',
-                        letterSpacing: '-0.3px',
-                      }}>
-                        {isPositive ? '+' : ''}{netPnl.toFixed(2)}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </>
-            )}
-
-            {/* Footer buttons — matches competitor layout */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '4px' }}>
-              <button
-                onClick={() => setEditPos(null)}
-                style={{
-                  padding: '8px 20px', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 600,
-                  background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleEdit}
-                style={{
-                  padding: '8px 20px', borderRadius: '8px', fontSize: '0.78rem', fontWeight: 600,
-                  background: '#238636', border: '1px solid #2ea043', color: '#ffffff', cursor: 'pointer',
-                }}
-              >
-                Save Changes
-              </button>
+            <div className="pos-modal-actions">
+              <button className="pos-btn-cancel" onClick={() => setEditPos(null)}>Cancel</button>
+              <button className="pos-btn-save" onClick={saveEdit}>Save</button>
             </div>
           </div>
-        </div>
-        );
-      })()}
-
-      <div className="adm-pos-stats-grid">
-        <div className="adm-pos-stat-card">
-          <div className="adm-pos-stat-label">USER</div>
-          <div className="adm-pos-stat-value" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {uid ? (selectedUser.client_id || (uid.length > 12 ? uid.slice(0, 12) + '...' : uid)).toUpperCase() : 'None'}
-            {onOpenUserPanel && (
-              <button 
-                onClick={onOpenUserPanel} 
-                style={{ 
-                  background: '#161b22', border: '1px solid #30363d', color: '#4493f8', 
-                  fontSize: '11px', cursor: 'pointer', padding: '2px 8px', borderRadius: '4px' 
-                }}
-              >
-                Change
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="adm-pos-stat-card">
-          <div className="adm-pos-stat-label">OPEN PNL</div>
-          <div className={`adm-pos-stat-value ${openPnl >= 0 ? 'pos' : 'neg'}`}>{(openPnl ?? 0).toFixed(2)}</div>
-        </div>
-        {tab === 'closed' && (
-          <div className="adm-pos-stat-card">
-            <div className="adm-pos-stat-label" style={{ color: '#f85149' }}>TOTAL SETTLEMENT</div>
-            <div className="adm-pos-stat-value" style={{ color: '#f85149' }}>-{(totalSettlement ?? 0).toFixed(2)}</div>
-          </div>
-        )}
-        <div className="adm-pos-stat-card">
-          <div className="adm-pos-stat-label">WEEKLY PNL</div>
-          <div className={`adm-pos-stat-value ${weeklyPnl >= 0 ? 'pos' : 'neg'}`}>{weeklyPnl.toFixed(2)}</div>
-        </div>
-      </div>
-
-      <div className="adm-pos-tabs">
-        {(['open', 'closed'] as const).map(t => (
-          <button key={t} className={`adm-pos-tab ${tab === t ? 'active' : ''}`} onClick={() => switchTab(t)}>
-            {t === 'open' ? 'Open Position' : 'Closed Position'}
-          </button>
-        ))}
-      </div>
-
-      {tab !== 'closed' && (
-        <div className="adm-pos-select-wrap">
-          <button className="adm-pos-select-btn">Select Multiple</button>
         </div>
       )}
 
-      <div className="adm-ord-search-wrap">
-        <i className="fas fa-search adm-ord-search-icon" />
-        <input className="adm-ord-search" placeholder="Search by user or symbol" value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1); }} />
-      </div>
-
-      <div className="adm-ord-controls">
-        <div className="adm-ord-rows-wrap">
-          <span className="adm-ord-rows-label">Rows</span>
-          <select className="adm-ord-rows-select" value={rows} onChange={e => { setRows(e.target.value); setPage(1); }}>
-            {['10', '25', '50', '100'].map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </div>
-      </div>
-      <button className="adm-ord-download"><i className="fas fa-download" /> Download Excel</button>
-
-      <div className="adm-ord-list" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        {posLoading ? (
-          Array.from({ length: 4 }).map((_, i) => (
-            <div className="adm-pos-card" key={i} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <SkeletonLine width={100} height={14} />
-                  <SkeletonLine width={160} height={11} />
-                </div>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <SkeletonLine width={40} height={22} style={{ borderRadius: 4 }} />
-                  <SkeletonLine width={60} height={22} style={{ borderRadius: 4 }} />
-                </div>
+      {/* Filter Overlay */}
+      {filterOpen && (
+        <div className="pos-filter-overlay" onClick={() => setFilterOpen(false)}>
+          <div className="pos-filter-panel" onClick={e => e.stopPropagation()}>
+            <div className="pos-filter-header">
+              <h3>Select User</h3>
+              <button className="pos-close-btn" onClick={() => setFilterOpen(false)}>✕</button>
+            </div>
+            <div className="pos-filter-grid">
+              <div className="pos-filter-group">
+                <label>Role</label>
+                <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+                  <option value="all">All Roles</option>
+                  <option value="admin">Admin</option>
+                  <option value="broker">Broker</option>
+                  <option value="sub_broker">Sub Broker</option>
+                  <option value="user">User</option>
+                </select>
               </div>
-              <SkeletonLine width="100%" height={1} style={{ background: '#21262d' }} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
-                {Array.from({ length: 8 }).map((_, j) => <SkeletonLine key={j} height={12} width="70%" />)}
+              <div className="pos-filter-group">
+                <label>Search User</label>
+                <input type="text" placeholder="Name or ID..." value={userSearch} onChange={e => setUserSearch(e.target.value)} />
               </div>
             </div>
-          ))
-        ) : displayed.length === 0 ? (
-          <div className="adm-mw-empty">No positions found.</div>
-        ) : displayed.map((p, i) => (
-          <div className="adm-pos-card" key={i}>
-            <div className="adm-pos-card-header">
-              <div className="adm-pos-card-title-group">
-                <span className="adm-pos-card-symbol">{p.symbol}</span>
-                <span className={`adm-pos-side-badge ${p.side === 'BUY' ? 'buy' : 'sell'}`}>{p.side}</span>
-                {!uid && (
-                  <span style={{ marginLeft: 8, fontSize: '11px', color: '#8b949e', background: '#21262d', padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase' }}>
-                    {p.client_id || p.user_name || p.user_id?.slice(0, 8)}
-                  </span>
-                )}
+            <div className="pos-users-list-section">
+              <div className="pos-users-list-title">
+                <span>All Users</span>
+                <span className="pos-count-badge">{filteredUsers.length} users</span>
               </div>
-              <div className="adm-pos-card-pnl-group">
-                <span className={`adm-pos-pnl-badge ${p.pnl >= 0 ? 'pos' : 'neg'}`}>
-                  {p.pnl >= 0 ? '+' : ''}{(p.pnl ?? 0).toFixed(2)}
-                </span>
-              </div>
-            </div>
-            
-            <div className="adm-pos-card-grid">
-              <div className="adm-pos-card-metric">
-                <span className="adm-pos-metric-label">Qty</span>
-                <span className="adm-pos-metric-value">{p.qty}</span>
-              </div>
-              <div className="adm-pos-card-metric">
-                <span className="adm-pos-metric-label">Avg Price</span>
-                <span className="adm-pos-metric-value">{(p.avgPrice ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="adm-pos-card-metric">
-                <span className="adm-pos-metric-label">Entry Price</span>
-                <span className="adm-pos-metric-value">{(p.entry ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="adm-pos-card-metric">
-                {tab !== 'closed' ? (
-                  <>
-                    <span className="adm-pos-metric-label">LTP</span>
-                    <span className="adm-pos-metric-value ltp">{(p.ltp ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="adm-pos-metric-label">Exit Price</span>
-                    <span className="adm-pos-metric-value">{(p.exit ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                  </>
-                )}
-              </div>
-              <div className="adm-pos-card-metric">
-                <span className="adm-pos-metric-label">Duration</span>
-                <span className="adm-pos-metric-value">{p.duration}</span>
-              </div>
-              <div className="adm-pos-card-metric">
-                <span className="adm-pos-metric-label">Brokerage</span>
-                <span className="adm-pos-metric-value">{(p.brokerage ?? 0).toFixed(2)}</span>
-              </div>
-              <div className="adm-pos-card-metric col-span-2">
-                <span className="adm-pos-metric-label">SL / TP</span>
-                <span className="adm-pos-metric-value">{p.slTp}</span>
-              </div>
-              {tab === 'closed' && (
-                <>
-                  <div className="adm-pos-card-metric col-span-2">
-                    <span className="adm-pos-metric-label">Settlement</span>
-                    <span className="adm-pos-metric-value settlement">{p.settlement || '-'}</span>
+              <div className="pos-users-list">
+                <div className="pos-user-list-item" onClick={() => { setViewMode('global'); setFilterOpen(false); }}>
+                  <div className="pos-user-info">
+                    <span className="pos-user-name">All Platform</span>
+                    <span className="pos-user-id">View all positions</span>
                   </div>
-                  {p.settlementAmount && p.settlementAmount > 0 ? (
-                    <div className="adm-pos-card-metric col-span-2">
-                      <span className="adm-pos-metric-label" style={{ color: '#f85149' }}>Settlement Deficit</span>
-                      <span className="adm-pos-metric-value" style={{ color: '#f85149', fontWeight: 600 }}>-₹{p.settlementAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  ) : null}
-                  {p.closed_by && (
-                    <div className="adm-pos-card-metric col-span-2">
-                      <span className="adm-pos-metric-label">Closed By</span>
-                      <span className="adm-pos-metric-value" style={{ background: '#30363d', padding: '2px 6px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>{p.closed_by.replace(/_/g, ' ')}</span>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="adm-pos-card-footer">
-              <div className="adm-pos-time-group">
-                <div className="adm-pos-time-row">
-                  <span className="adm-pos-time-label">Entry:</span>
-                  <span className="adm-pos-time-value">{p.entryTime}</span>
+                  <span className="pos-role-tag super">super</span>
                 </div>
-                {tab === 'closed' && (
-                  <div className="adm-pos-time-row">
-                    <span className="adm-pos-time-label">Exit:</span>
-                    <span className="adm-pos-time-value">{p.exitTime}</span>
+                {filteredUsers.map(u => (
+                  <div key={u.id} className="pos-user-list-item" onClick={() => { setViewMode('user'); setFilterOpen(false); }}>
+                    <div className="pos-user-info">
+                      <span className="pos-user-name">{u.full_name || u.id}</span>
+                      <span className="pos-user-id">{u.id}</span>
+                    </div>
+                    <span className={`pos-role-tag ${getRoleTag(u.role)}`}>{u.role}</span>
                   </div>
-                )}
+                ))}
               </div>
-
-              <div className="adm-pos-actions-group">
-                {tab === 'open' && (
-                  <>
-                    <button className="adm-pos-btn-sqoff" onClick={() => handleSqoff(p.id)}>Square Off</button>
-                    <button className="adm-pos-btn-edit" onClick={() => openEdit(p)}>Edit</button>
-                    <button className="adm-pos-btn-delete" onClick={() => setConfirmDeleteId(p.id)}>Delete</button>
-                  </>
-                )}
-                {tab === 'closed' && (
-                  <>
-                    <button className="adm-pos-btn-edit" onClick={() => openEdit(p)}>Edit</button>
-                    <button className="adm-pos-btn-reopen" onClick={() => handleReopen(p)}>Reopen</button>
-                    <button className="adm-pos-btn-delete" onClick={() => setConfirmDeleteId(p.id)}>Delete</button>
-                  </>
-                )}
-              </div>
+            </div>
+            <div className="pos-filter-actions">
+              <button className="pos-btn-refresh" onClick={() => { setRefreshKey(k => k + 1); setFilterOpen(false); }}>Refresh Data</button>
+              <button className="pos-btn-primary" onClick={() => setFilterOpen(false)}>Apply &amp; Close</button>
             </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
-      <div className="adm-pos-pagination">
-        <span className="adm-pos-page-info">Page {page} of {totalPages}</span>
-        <div className="adm-pos-page-btns">
-          <button className="adm-pos-page-btn" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
-          <button className="adm-pos-page-btn active-btn" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+      {/* Main Panel */}
+      <div className="pos-panel">
+        
+        {/* Trades Header */}
+        <div className="pos-trades-header">
+          <div className="pos-title-section">
+            <h2>Positions</h2>
+          </div>
+          <div className="pos-header-actions">
+            <div className="pos-user-context" onClick={() => setFilterOpen(true)}>
+              <span className="pos-context-label">Viewing:</span>
+              <span className="pos-context-name">{contextLabel}</span>
+              <span className="pos-context-role">{isGlobal ? 'all' : selectedUser.role}</span>
+              <span className="pos-context-arrow">▾</span>
+            </div>
+            {onOpenUserPanel && !isGlobal && (
+              <button className="pos-change-user-btn" onClick={() => onOpenUserPanel()}>Change User</button>
+            )}
+          </div>
+        </div>
+
+        {/* Summary Top (Ledger & Timeframe) */}
+        <div className="pos-summary-top">
+          <span className="pos-summary-label">Ledger</span>
+          <div className="pos-pl-timeframe">
+            <button className={`pos-tf-btn ${timeframe === 'daily' ? 'active' : ''}`} onClick={() => { setTimeframe('daily'); setStartDate(''); setEndDate(''); }}>Daily</button>
+            <button className={`pos-tf-btn ${timeframe === 'weekly' ? 'active' : ''}`} onClick={() => { setTimeframe('weekly'); setStartDate(''); setEndDate(''); }}>Weekly</button>
+            <button className={`pos-tf-btn ${timeframe === 'monthly' ? 'active' : ''}`} onClick={() => { setTimeframe('monthly'); setStartDate(''); setEndDate(''); }}>Monthly</button>
+            <div className="pos-custom-tf-wrap">
+              <input type="date" className="pos-date-input" value={startDate} onChange={e => { setStartDate(e.target.value); setTimeframe('custom'); }} />
+              <span className="pos-date-sep">–</span>
+              <input type="date" className="pos-date-input" value={endDate} onChange={e => { setEndDate(e.target.value); setTimeframe('custom'); }} />
+              {(startDate || endDate) && <button className="pos-date-clear" onClick={() => { setStartDate(''); setEndDate(''); }}>✕</button>}
+            </div>
+          </div>
+        </div>
+
+        {/* 4 Summary Cards */}
+        <div className="pos-summary-cards">
+          <div className="pos-summary-card">
+            <div className="pos-card-label">Total Users</div>
+            <div className="pos-card-value">{isGlobal ? usersList.length : 1}</div>
+            <div className="pos-card-sub">active</div>
+          </div>
+          <div className="pos-summary-card">
+            <div className="pos-card-label">Open P&amp;L</div>
+            <div className={`pos-card-value ${openPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{openPnl.toFixed(2)}
+            </div>
+            <div className="pos-card-sub">unrealized</div>
+          </div>
+          <div className="pos-summary-card">
+            <div className="pos-card-label">Ledger</div>
+            <div className={`pos-card-value ${ledger >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{ledger.toFixed(2)}
+            </div>
+            <div className="pos-card-sub">{timeframe}</div>
+          </div>
+          <div className="pos-summary-card">
+            <div className="pos-card-label">Closed P&amp;L</div>
+            <div className={`pos-card-value ${closedPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{closedPnl.toFixed(2)}
+            </div>
+            <div className="pos-card-sub">realized</div>
+          </div>
+        </div>
+
+        {/* Segment Tabs */}
+        <div className="pos-segment-tabs">
+          <button className={`pos-tab-btn ${tab === 'open' ? 'active' : ''}`} onClick={() => { setTab('open'); setPage(1); }}>
+            Open <span className="pos-badge-count">{tab === 'open' ? filtered.length : 0}</span>
+          </button>
+          <button className={`pos-tab-btn ${tab === 'closed' ? 'active' : ''}`} onClick={() => { setTab('closed'); setPage(1); }}>
+            Closed <span className="pos-badge-count">{tab === 'closed' ? filtered.length : 0}</span>
+          </button>
+
+          <div className="pos-tab-search-group">
+            <input className="pos-search-input" placeholder="Search symbol..." value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
+            <select className="pos-rows-select" value={rows} onChange={e => { setRows(e.target.value); setPage(1); }}>
+              <option value="10">10 rows</option>
+              <option value="25">25 rows</option>
+              <option value="50">50 rows</option>
+              <option value="100">100 rows</option>
+            </select>
+            <button className="pos-refresh-btn" onClick={() => setRefreshKey(k => k + 1)} title="Refresh"><i className="fas fa-sync-alt" /></button>
+          </div>
+
+          <div className="pos-export-wrapper" ref={exportRef}>
+            <button className="pos-export-btn" onClick={() => setExportOpen(v => !v)}>⬇ Export</button>
+            {exportOpen && (
+              <div className="pos-export-dropdown">
+                <button className="pos-dropdown-item" onClick={exportToCsv}>Spreadsheet (.csv)</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Content */}
+        {posLoading ? (
+          <div className="pos-loading-state">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="pos-skeleton-card">
+                <div className="pos-skeleton-header" />
+                <div className="pos-skeleton-rows">
+                  {Array.from({ length: 3 }).map((__, j) => <div key={j} className="pos-skeleton-row" />)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="pos-empty-state">
+            <i className="fas fa-inbox" style={{ fontSize: '2rem', opacity: 0.25, display: 'block', marginBottom: 10 }} />
+            No positions found
+          </div>
+        ) : isGlobal ? (
+          /* User-grouped trade cards */
+          <div className="pos-user-cards">
+            {Object.entries(groupedByUser).map(([userKey, userPos]) => {
+              const first = userPos[0];
+              const isCollapsed = collapsedUsers[userKey];
+              const userOpenPnl = userPos.reduce((s, p) => s + (p.status === 'open' ? (p.pnl || 0) : 0), 0);
+              const userClosedPnl = userPos.reduce((s, p) => s + (p.status === 'closed' ? (p.pnl || 0) : 0), 0);
+              
+              return (
+                <div key={userKey} className="pos-user-trade-card">
+                  <div className="pos-user-header" onClick={() => setCollapsedUsers(prev => ({ ...prev, [userKey]: !prev[userKey] }))}>
+                    <div className="pos-user-info">
+                      <span className="pos-user-name">{first.user_name || userKey}</span>
+                      {first.user_client_id && <span className="pos-user-id">{first.user_client_id}</span>}
+                    </div>
+                    <div className="pos-user-counts">
+                      <div className="pos-count-item">
+                        <span className="pos-count-label">POSITIONS</span>
+                        <span className="pos-count-value">{userPos.length}</span>
+                      </div>
+                    </div>
+                    <div className="pos-user-stats">
+                      <div className="pos-stat-item">
+                        <span className="pos-stat-label">Open P&amp;L</span>
+                        <span className={`pos-stat-value ${userOpenPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
+                          ₹{userOpenPnl.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="pos-stat-item">
+                        <span className="pos-stat-label">Closed P&amp;L</span>
+                        <span className={`pos-stat-value ${userClosedPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
+                          ₹{userClosedPnl.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="pos-collapse-icon">{isCollapsed ? '▸' : '▾'}</span>
+                  </div>
+                  {!isCollapsed && (
+                    <div className="pos-trade-content">
+                      <PositionTable 
+                        positions={userPos} 
+                        showUser={false} 
+                        onEdit={openEdit} 
+                        onDelete={id => setConfirmDeleteId(id)} 
+                        onSqoff={handleSqoff} 
+                        onReopen={handleReopen} 
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          /* Single user flat table */
+          <div className="pos-user-trade-card">
+            <div className="pos-user-header" style={{ cursor: 'default' }}>
+              <div className="pos-user-info">
+                <span className="pos-user-name">{selectedUser.client_id || uid.slice(0, 12)}</span>
+                <span className="pos-user-id">{selectedUser.role}</span>
+              </div>
+              <div className="pos-user-counts">
+                <div className="pos-count-item">
+                  <span className="pos-count-label">TOTAL POSITIONS</span>
+                  <span className="pos-count-value">{filtered.length}</span>
+                </div>
+              </div>
+            </div>
+            <div className="pos-trade-content">
+              <PositionTable 
+                positions={displayed} 
+                showUser={false} 
+                onEdit={openEdit} 
+                onDelete={id => setConfirmDeleteId(id)} 
+                onSqoff={handleSqoff} 
+                onReopen={handleReopen} 
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="pos-pagination">
+            <button className="pos-page-btn" disabled={page === 1} onClick={() => setPage(1)}>«</button>
+            <button className="pos-page-btn" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹</button>
+            <span className="pos-page-info">Page {page} of {totalPages}</span>
+            <button className="pos-page-btn" disabled={page === totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>›</button>
+            <button className="pos-page-btn" disabled={page === totalPages} onClick={() => setPage(totalPages)}>»</button>
+          </div>
+        )}
+
+        <div className="pos-footer-note">
+          Super Admin · Real-time view · {new Date().toLocaleTimeString('en-IN')}
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div style={{ height: 24 }} />
+// ─── Position Table Subcomponent ──────────────────────────────────────────────
+
+function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReopen }: { 
+  positions: Position[]; 
+  showUser: boolean; 
+  onEdit: (p: Position) => void;
+  onDelete: (id: string) => void;
+  onSqoff: (id: string) => void;
+  onReopen: (p: Position) => void;
+}) {
+  return (
+    <div className="pos-table-wrap">
+      <table className="pos-table">
+        <thead>
+          <tr>
+            <th>P&amp;L</th>
+            <th>Symbol</th>
+            {showUser && <th>User</th>}
+            <th>Side</th>
+            <th>Qty</th>
+            <th>Avg Price</th>
+            <th>LTP / Exit</th>
+            <th>Brok / Settlem.</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {positions.map(p => {
+            const pnl = p.pnl || 0;
+            return (
+              <tr key={p.id}>
+                <td data-label="P&L">
+                  <span className={`pos-pl-val ${pnl >= 0 ? 'pos-green' : 'pos-red'}`}>
+                    ₹{pnl.toFixed(2)}
+                  </span>
+                </td>
+                <td data-label="Symbol">
+                  <span className="pos-sym-badge">{p.symbol}</span>
+                  <div className="pos-sub-text">{p.created_at ? new Date(p.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : ''}</div>
+                </td>
+                {showUser && (
+                  <td data-label="User">
+                    <span className="pos-user-badge">{p.user_name || p.user_id?.slice(0,8)}</span>
+                    <div className="pos-sub-text">{p.client_id}</div>
+                  </td>
+                )}
+                <td data-label="Side">
+                  <span className={`pos-side ${p.side.toLowerCase()}`}>{p.side}</span>
+                  <div className="pos-sub-text">{p.status}</div>
+                </td>
+                <td data-label="Qty">{p.qty}</td>
+                <td data-label="Avg Price">{p.avgPrice.toFixed(2)}</td>
+                <td data-label="LTP / Exit">
+                  <span className="pos-val-badge">
+                    {p.status === 'closed' ? (p.exit ?? 0).toFixed(2) : (p.ltp ?? 0).toFixed(2)}
+                  </span>
+                </td>
+                <td data-label="Brok / Settlem.">
+                  <span className="pos-sub-text">B: {p.brokerage || 0}</span><br />
+                  <span className="pos-sub-text">S: {p.settlement || '—'}</span>
+                </td>
+                <td data-label="Actions">
+                  <div className="pos-trade-actions">
+                    {p.status === 'open' && (
+                      <button className="pos-action-btn sqoff" onClick={() => onSqoff(p.id)}>Sq. Off</button>
+                    )}
+                    {p.status === 'closed' && (
+                      <button className="pos-action-btn reopen" onClick={() => onReopen(p)}>Reopen</button>
+                    )}
+                    <button className="pos-action-btn edit" onClick={() => onEdit(p)}>Edit</button>
+                    <button className="pos-action-btn delete" onClick={() => onDelete(p.id)}>Delete</button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

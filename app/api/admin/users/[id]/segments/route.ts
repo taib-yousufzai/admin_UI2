@@ -236,6 +236,16 @@ export async function POST(
     }
 
     try {
+      const { ConfigurationService } = await import('@/lib/trading/ConfigurationService');
+      ConfigurationService.clearCache();
+      const { getRedisClient } = await import('@/lib/redis');
+      const redis = getRedisClient();
+      await redis.publish('config:invalidate', 'clear');
+    } catch (cacheErr) {
+      console.error('[segments] Failed to clear and publish ConfigurationService invalidation:', cacheErr);
+    }
+
+    try {
       const { checkAndSquareOffPositionsForMargin } = await import('@/lib/marginSquareOff');
       await checkAndSquareOffPositionsForMargin(id, adminClient);
     } catch (err) {

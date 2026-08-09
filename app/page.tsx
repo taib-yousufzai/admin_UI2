@@ -3,12 +3,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
-import Footer from '@/components/Footer';
-import Sidebar from '@/components/Sidebar';
 
 import { getSession, getRole } from '@/lib/auth';
+import { api, ApiError } from '@/lib/api';
 import { useMarketQuotes } from '@/hooks/useMarketQuotes';
 import { isContractExpired } from '@/lib/contractExpiry';
+import { useTradeConfig } from '@/contexts/TradeConfigContext';
+
+import AnimatedLoader from '@/components/AnimatedLoader';
 import TickFlash from '@/components/TickFlash';
 import './page.css';
 
@@ -20,10 +22,10 @@ const KITE_INSTRUMENTS_ROW1 = [
   'CDS:USDINR26JULFUT',
 ];
 const KITE_INSTRUMENTS_ROW2 = [
-  'MCX:CRUDEOIL26JULFUT',
+  'MCX:CRUDEOIL26AUGFUT',
   'MCX:GOLD26AUGFUT',
   'MCX:SILVER26SEPFUT',
-  'MCX:NATURALGAS26JULFUT',
+  'MCX:NATURALGAS26AUGFUT',
 ];
 
 const KITE_DISPLAY_MAP: Record<string, { name: string; icon: string }> = {
@@ -31,10 +33,10 @@ const KITE_DISPLAY_MAP: Record<string, { name: string; icon: string }> = {
   'BSE:SENSEX': { name: 'SENSEX', icon: 'fas fa-chart-area' },
   'NSE:NIFTY BANK': { name: 'BANK NIFTY', icon: 'fas fa-building' },
   'CDS:USDINR26JULFUT': { name: 'USD/INR', icon: 'fas fa-dollar-sign' },
-  'MCX:CRUDEOIL26JULFUT': { name: 'CRUDE OIL', icon: 'fas fa-oil-can' },
+  'MCX:CRUDEOIL26AUGFUT': { name: 'CRUDE OIL', icon: 'fas fa-oil-can' },
   'MCX:GOLD26AUGFUT': { name: 'GOLD', icon: 'fas fa-coins' },
   'MCX:SILVER26SEPFUT': { name: 'SILVER', icon: 'fas fa-gem' },
-  'MCX:NATURALGAS26JULFUT': { name: 'NAT GAS', icon: 'fas fa-fire' },
+  'MCX:NATURALGAS26AUGFUT': { name: 'NAT GAS', icon: 'fas fa-fire' },
 };
 
 type MarketItem = { name: string; price: number; change: number; changeAmt?: number; type: string; icon: string };
@@ -110,13 +112,61 @@ const getNextExpiryDate = (dayOfWeek: number) => {
   };
 };
 
+const getLastTuesdayOfCurrentOrNextMonth = () => {
+  const getLastTuesday = (year: number, month: number) => {
+    const date = new Date(year, month + 1, 0);
+    const day = date.getDay();
+    const diff = (day >= 2) ? (day - 2) : (day + 5);
+    date.setDate(date.getDate() - diff);
+    return date;
+  };
+
+  const today = new Date();
+  const todayZero = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let lastTuesday = getLastTuesday(today.getFullYear(), today.getMonth());
+  if (lastTuesday < todayZero) {
+    const nextMonth = today.getMonth() === 11 ? 0 : today.getMonth() + 1;
+    const nextYear = today.getMonth() === 11 ? today.getFullYear() + 1 : today.getFullYear();
+    lastTuesday = getLastTuesday(nextYear, nextMonth);
+  }
+  const daysDiff = Math.ceil((lastTuesday.getTime() - todayZero.getTime()) / (1000 * 60 * 60 * 24));
+  return {
+    dateStr: lastTuesday.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+    isToday: daysDiff === 0
+  };
+};
+
+const getLastThursdayOfCurrentOrNextMonth = () => {
+  const getLastThursday = (year: number, month: number) => {
+    const date = new Date(year, month + 1, 0);
+    const day = date.getDay();
+    const diff = (day >= 4) ? (day - 4) : (day + 3);
+    date.setDate(date.getDate() - diff);
+    return date;
+  };
+
+  const today = new Date();
+  const todayZero = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let lastThursday = getLastThursday(today.getFullYear(), today.getMonth());
+  if (lastThursday < todayZero) {
+    const nextMonth = today.getMonth() === 11 ? 0 : today.getMonth() + 1;
+    const nextYear = today.getMonth() === 11 ? today.getFullYear() + 1 : today.getFullYear();
+    lastThursday = getLastThursday(nextYear, nextMonth);
+  }
+  const daysDiff = Math.ceil((lastThursday.getTime() - todayZero.getTime()) / (1000 * 60 * 60 * 24));
+  return {
+    dateStr: lastThursday.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+    isToday: daysDiff === 0
+  };
+};
+
 const getExpiryIndexes = () => [
-  { name: "NIFTY", fullName: "NIFTY 50", shortCode: "N50", expiry: getNextExpiryDate(4), lotSize: 65 },
-  { name: "BANKNIFTY", fullName: "BANK NIFTY", shortCode: "BNF", expiry: getNextExpiryDate(3), lotSize: 30 },
-  { name: "FINNIFTY", fullName: "FIN NIFTY", shortCode: "FIN", expiry: getNextExpiryDate(2), lotSize: 60 },
-  { name: "SENSEX", fullName: "SENSEX", shortCode: "SEN", expiry: getNextExpiryDate(5), lotSize: 20 },
-  { name: "MIDCAP", fullName: "MIDCAP NIFTY", shortCode: "MID", expiry: getNextExpiryDate(1), lotSize: 120 },
-  { name: "BANKEX", fullName: "BANKEX", shortCode: "BKX", expiry: getNextExpiryDate(5), lotSize: 30 },
+  { name: "NIFTY", fullName: "NIFTY 50", shortCode: "N50", expiry: getNextExpiryDate(4), lotSize: 65 }, // Thursday
+  { name: "BANKNIFTY", fullName: "BANK NIFTY", shortCode: "BNF", expiry: getNextExpiryDate(3), lotSize: 30 }, // Wednesday
+  { name: "FINNIFTY", fullName: "FIN NIFTY", shortCode: "FIN", expiry: getNextExpiryDate(2), lotSize: 60 }, // Tuesday
+  { name: "SENSEX", fullName: "SENSEX", shortCode: "SEN", expiry: getNextExpiryDate(5), lotSize: 20 }, // Friday
+  { name: "MIDCAP", fullName: "MIDCAP NIFTY", shortCode: "MID", expiry: getNextExpiryDate(1), lotSize: 120 }, // Monday
+  { name: "BANKEX", fullName: "BANKEX", shortCode: "BKX", expiry: getNextExpiryDate(1), lotSize: 30 }, // Monday
 ];
 
 
@@ -127,7 +177,8 @@ export default function Page() {
   const pathname = usePathname();
   const router = useRouter();
   const [allowedSegments, setAllowedSegments] = useState<string[]>([]);
-  const [scriptSettings, setScriptSettings] = useState<{ symbol: string; lot_size: number }[]>([]);
+  // scriptSettings comes from the shared TradeConfigProvider
+  const { scriptSettings } = useTradeConfig();
 
   useEffect(() => {
     getSession().then((session) => {
@@ -145,28 +196,16 @@ export default function Page() {
   useEffect(() => {
     async function fetchAllowedSegments() {
       try {
-        const { supabase } = await import('@/lib/supabaseClient');
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const res = await fetch('/api/user/profile', {
-          headers: { Authorization: `Bearer ${session.access_token}` }
-        });
-        if (res.ok) {
-          const profile = await res.json();
-          if (profile && profile.segments) {
-            setAllowedSegments(profile.segments);
-          }
-          // Fetch script settings for dynamic lot sizes
-          const resScript = await fetch('/api/user/script-settings', {
-            headers: { Authorization: `Bearer ${session.access_token}` }
-          });
-          if (resScript.ok) {
-            const ssData = await resScript.json();
-            setScriptSettings(ssData || []);
-          }
+        const profile = await api.get<{ segments?: string[] }>('/api/user/profile');
+        if (profile && profile.segments) {
+          setAllowedSegments(profile.segments);
         }
       } catch (err) {
-        console.error('Failed to fetch allowed segments', err);
+        if (err instanceof ApiError) {
+          console.error('Failed to fetch allowed segments', err.status, err.details);
+        } else {
+          console.error('Failed to fetch allowed segments', err);
+        }
       }
     }
     fetchAllowedSegments();
@@ -176,16 +215,45 @@ export default function Page() {
   const [theme, setTheme] = useState<'light' | 'dark' | 'black' | 'blue'>('light');
   const [isExpiryDrawerOpen, setIsExpiryDrawerOpen] = useState(false);
 
-  // Build expiry index list, overriding hardcoded lot sizes with DB values
-  const expiryIndexes = getExpiryIndexes().map(item => {
-    const n = item.name.toUpperCase();
-    const dbMatch = scriptSettings.find(s => n.includes(s.symbol.toUpperCase()) || s.symbol.toUpperCase().includes(n));
-    return dbMatch ? { ...item, lotSize: Number(dbMatch.lot_size) } : item;
-  });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<{ id: string; title: string; message: string; read?: boolean }[]>([]);
   const [isNotifDrawerOpen, setIsNotifDrawerOpen] = useState(false);
+  const [dbExpiries, setDbExpiries] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    async function fetchExpiries() {
+      try {
+        const json = await api.get<{ success: boolean; expiries?: Record<string, string> }>('/api/market/expiries');
+        if (json.success && json.expiries) {
+          setDbExpiries(json.expiries);
+        }
+      } catch (err) {
+        console.error('Failed to fetch expiries', err);
+      }
+    }
+    fetchExpiries();
+  }, []);
+
+  // Build expiry index list, overriding hardcoded lot sizes with DB values and real expiries
+  const expiryIndexes = getExpiryIndexes().map(item => {
+    const n = item.name.toUpperCase();
+    const dbName = n === 'MIDCAP' ? 'MIDCPNIFTY' : n;
+    
+    let finalExpiry = item.expiry; // fallback to calculated
+    const realExpiryDateStr = dbExpiries[dbName];
+    if (realExpiryDateStr) {
+       const realDate = new Date(realExpiryDateStr);
+       const today = new Date();
+       const isToday = realDate.getDate() === today.getDate() && realDate.getMonth() === today.getMonth() && realDate.getFullYear() === today.getFullYear();
+       finalExpiry = {
+          dateStr: realDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+          isToday
+       };
+    }
+
+    const dbMatch = scriptSettings.find(s => n.includes(s.symbol.toUpperCase()) || s.symbol.toUpperCase().includes(n));
+    return dbMatch ? { ...item, expiry: finalExpiry, lotSize: Number(dbMatch.lot_size) } : { ...item, expiry: finalExpiry };
+  });
 
   const [tradingHours, setTradingHours] = useState<{ id: string; name: string; start_time: string; end_time: string; is_active: boolean }[]>([]);
 
@@ -227,34 +295,120 @@ export default function Page() {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        const res = await fetch('/api/notifications?limit=20', {
-          headers: { Authorization: `Bearer ${session.access_token}` }
-        });
-        if (res.ok) {
-          const result = await res.json();
-          if (result && result.notifications) {
-            const list = result.notifications ?? [];
-            setNotifications(list);
-          }
+        const result = await api.get<{ notifications?: { id: string; title: string; message: string; read?: boolean }[] }>('/api/notifications?limit=20');
+        if (result && result.notifications) {
+          const list = result.notifications ?? [];
+          setNotifications(list);
         }
       } catch (err) {
-        console.error('Failed to fetch notifications', err);
+        if (err instanceof ApiError) {
+          console.error('Failed to fetch notifications', err.status, err.details);
+        } else {
+          console.error('Failed to fetch notifications', err);
+        }
       }
     };
     fetchNotifications();
   }, []);
 
-  const allKiteInstruments = [...KITE_INSTRUMENTS_ROW1, ...KITE_INSTRUMENTS_ROW2];
-  const { quotes } = useMarketQuotes(allKiteInstruments);
-  const kiteConnected = true;
-  const kiteLoading = false;
+  // Mark all notifications as read when the drawer is opened
+  useEffect(() => {
+    if (isNotifDrawerOpen && notifications.some(n => !n.read)) {
+      const markAllRead = async () => {
+        try {
+          await api.patch<void>('/api/notifications/all', {});
+          setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+        } catch (err) {
+          if (err instanceof ApiError) {
+            console.error('Failed to mark notifications as read', err.status, err.details);
+          } else {
+            console.error('Failed to mark notifications as read', err);
+          }
+        }
+      };
+      markAllRead();
+    }
+  }, [isNotifDrawerOpen, notifications]);
+
+  const [marketRow1Keys, setMarketRow1Keys] = useState<string[]>(KITE_INSTRUMENTS_ROW1);
+  const [marketRow2Keys, setMarketRow2Keys] = useState<string[]>(KITE_INSTRUMENTS_ROW2);
+  const [displayMap, setDisplayMap] = useState<Record<string, { name: string; icon: string }>>(KITE_DISPLAY_MAP);
+
+  useEffect(() => {
+    async function resolveExpiredContracts() {
+      const bases = [
+        { name: 'USDINR', prefix: 'CDS', type: ['FUT'] },
+        { name: 'CRUDEOIL', prefix: 'MCX', type: ['FUTCOM', 'FUT', 'MAPPED_FUT'] },
+        { name: 'GOLD', prefix: 'MCX', type: ['FUTCOM', 'FUT', 'MAPPED_FUT'] },
+        { name: 'SILVER', prefix: 'MCX', type: ['FUTCOM', 'FUT', 'MAPPED_FUT'] },
+        { name: 'NATURALGAS', prefix: 'MCX', type: ['FUTCOM', 'FUT', 'MAPPED_FUT'] }
+      ];
+
+      const newMap = { ...KITE_DISPLAY_MAP };
+      const newRow1 = [...KITE_INSTRUMENTS_ROW1];
+      const newRow2 = [...KITE_INSTRUMENTS_ROW2];
+      let changed = false;
+
+      for (const base of bases) {
+        // If the base is in row1 or row2 and expired (or we just want to forcefully fetch the active one)
+        const row1Idx = newRow1.findIndex(k => k.includes(base.name));
+        const row2Idx = newRow2.findIndex(k => k.includes(base.name));
+        
+        if (row1Idx !== -1 || row2Idx !== -1) {
+          const { data } = await supabase
+            .from('instruments')
+            .select('tradingsymbol')
+            .eq('name', base.name)
+            .in('instrument_type', base.type)
+            .gte('expiry', new Date().toISOString().split('T')[0])
+            .order('expiry', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (data?.tradingsymbol) {
+            const resolvedKey = `${base.prefix}:${data.tradingsymbol}`;
+            if (row1Idx !== -1 && newRow1[row1Idx] !== resolvedKey) {
+              const oldKey = newRow1[row1Idx];
+              newRow1[row1Idx] = resolvedKey;
+              newMap[resolvedKey] = newMap[oldKey];
+              changed = true;
+            }
+            if (row2Idx !== -1 && newRow2[row2Idx] !== resolvedKey) {
+              const oldKey = newRow2[row2Idx];
+              newRow2[row2Idx] = resolvedKey;
+              newMap[resolvedKey] = newMap[oldKey];
+              changed = true;
+            }
+          }
+        }
+      }
+
+      if (changed) {
+        setDisplayMap(newMap);
+        setMarketRow1Keys(newRow1);
+        setMarketRow2Keys(newRow2);
+      }
+    }
+
+    resolveExpiredContracts();
+  }, []);
+
+  const allKiteInstruments = [...marketRow1Keys, ...marketRow2Keys];
+  const {
+    quotes,
+    isLoading: marketLoading,
+    isUnreachable: marketUnreachable,
+    connectionStatus,
+    lastError,
+    reconnectCount
+  } = useMarketQuotes(allKiteInstruments);
+  const kiteConnected = connectionStatus === 'connected';
+  const kiteLoading = marketLoading;
 
   const buildRow = (instruments: string[]): (MarketItem & { expired?: boolean })[] => {
     return instruments.map((key) => {
       const q = quotes[key];
-      const display = KITE_DISPLAY_MAP[key] ?? { name: key, icon: 'fas fa-chart-line' };
+      const display = displayMap[key] ?? { name: key, icon: 'fas fa-chart-line' };
       const expired = isContractExpired(key);
       if (expired) {
         // Don't show stale 0/0 values — surface expiry to the user instead
@@ -272,8 +426,8 @@ export default function Page() {
     });
   };
 
-  const marketRow1 = buildRow(KITE_INSTRUMENTS_ROW1);
-  const marketRow2 = buildRow(KITE_INSTRUMENTS_ROW2);
+  const marketRow1 = buildRow(marketRow1Keys);
+  const marketRow2 = buildRow(marketRow2Keys);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem('marginApexTheme') as 'light' | 'dark' | 'black' | 'blue' | null;
@@ -319,16 +473,21 @@ export default function Page() {
 
   const instruments = activeCategory === 'equity' ? filteredEquityInstruments : filteredCommodityInstruments;
 
-  const filteredExpiryIndexes = expiryIndexes.filter(item => {
-    if (allowedSegments.length === 0) return true;
-    const dbSeg = mapOptionChainSymbolToDbSegment(item.name);
-    return allowedSegments.includes(dbSeg);
-  });
+  const filteredExpiryIndexes = expiryIndexes
+    .filter(item => {
+      if (allowedSegments.length === 0) return true;
+      const dbSeg = mapOptionChainSymbolToDbSegment(item.name);
+      return allowedSegments.includes(dbSeg);
+    })
+    .sort((a, b) => {
+      if (a.expiry.isToday && !b.expiry.isToday) return -1;
+      if (!a.expiry.isToday && b.expiry.isToday) return 1;
+      return 0;
+    });
 
   return (
     <div className="desktop-layout home-isolated-layout">
-      <Sidebar />
-
+      
       <main className="main-viewport home-isolated-viewport">
         <div className="app-container home-isolated-container">
           {/* Mobile Navigation Bar */}
@@ -400,17 +559,7 @@ export default function Page() {
                       <div className="expiry-text">
                         <h4>EXPIRY TODAY</h4>
                         <p>
-                          {(() => {
-                            const day = new Date().getDay();
-                            switch (day) {
-                              case 1: return "MIDCPNIFTY";
-                              case 2: return "FINNIFTY";
-                              case 3: return "BANKNIFTY";
-                              case 4: return "NIFTY 50";
-                              case 5: return "SENSEX & BANKEX";
-                              default: return "No Expiry Today";
-                            }
-                          })()}
+                          {expiryIndexes.filter(item => item.expiry.isToday).map(item => item.fullName).join(" & ") || "No Expiry Today"}
                         </p>
                       </div>
                     </div>
@@ -429,7 +578,9 @@ export default function Page() {
 
 
                     {kiteLoading && (
-                      <div className="market-status-msg"><i className="fas fa-circle-notch fa-spin" /> Checking connection…</div>
+                      <div className="market-status-msg" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <AnimatedLoader size="small" /> Checking connection…
+                      </div>
                     )}
 
 
@@ -460,7 +611,9 @@ export default function Page() {
                                   ) : (
                                     <>
                                       <div className="market-rect-price">
-                                        {market.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        <TickFlash value={market.price}>
+                                          {market.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </TickFlash>
                                       </div>
                                       <div className={`market-rect-change ${market.type}`}>
                                         {market.change >= 0
@@ -477,10 +630,11 @@ export default function Page() {
                       </div>
                     )}
 
-                    {!kiteLoading && Object.keys(quotes).length === 0 && (
+                    {marketUnreachable && (
                       <div className="market-status-msg" style={{ padding: '20px', textAlign: 'center', color: 'var(--red)', fontSize: '0.9rem' }}>
                         <i className="fas fa-exclamation-triangle" style={{ marginRight: '8px' }}></i>
                         Market data server is currently unreachable.
+                        {lastError && <div style={{ fontSize: '0.75rem', marginTop: '4px', opacity: 0.8 }}>Reason: {lastError} (Retries: {reconnectCount})</div>}
                       </div>
                     )}
                   </div>
@@ -502,7 +656,7 @@ export default function Page() {
                   </div>
 
                   {/* WhatsApp Support */}
-                  <div className="whatsapp-support" onClick={() => window.open('https://wa.me/918796535838', '_blank')}>
+                  <div className="whatsapp-support" onClick={() => window.open('https://wa.me/916239541970', '_blank')}>
                     <div className="whatsapp-inner">
                       <div className="whatsapp-icon"><i className="fab fa-whatsapp"></i></div>
                       <div className="whatsapp-content">
@@ -517,8 +671,7 @@ export default function Page() {
             </div>
           </div>
 
-          <Footer activeTab="home" />
-        </div>
+                  </div>
 
         {/* Drawers */}
         <div className={`expiry-half-drawer-overlay ${isExpiryDrawerOpen ? 'active' : ''}`} onClick={(e) => { if (e.target === e.currentTarget) setIsExpiryDrawerOpen(false); }}>

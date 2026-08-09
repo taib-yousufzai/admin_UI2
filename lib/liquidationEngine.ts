@@ -1,6 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
-import { calculateCarryBrokerage } from './brokerage';
-import { calculateExitPrice, calculateFreeMargin } from './floatingPnl';
+import { calculateCarryBrokerage } from './trading/BrokerageCalculator';
+import { calculateExitPrice, calculateFreeMargin } from './floatingPnl.ts';
 
 export interface LiquidationResult {
   liquidated: boolean;
@@ -69,11 +69,12 @@ export async function checkAndExecuteAccountLiquidation(
 
   // Not yet at liquidation level — return early, nothing to do
   if (totalFloatingPnl > threshold) {
-    console.log(
-      `[LiquidationEngine] SKIP user ${userId}: ` +
-      `PnL=₹${totalFloatingPnl.toFixed(2)} > threshold=₹${threshold.toFixed(2)} ` +
-      `(balance=₹${balance.toFixed(2)}, sqoff=${autoSqoffPercent}%, positions=${positions.length})`,
-    );
+    // Removed to avoid rate limit console spam
+    // console.log(
+    //   `[LiquidationEngine] SKIP user ${userId}: ` +
+    //   `PnL=₹${totalFloatingPnl.toFixed(2)} > threshold=₹${threshold.toFixed(2)} ` +
+    //   `(balance=₹${balance.toFixed(2)}, sqoff=${autoSqoffPercent}%, positions=${positions.length})`,
+    // );
     return { liquidated: false, positionsClosed: 0, totalPnl: totalFloatingPnl, settlementAmount: 0 };
   }
 
@@ -153,13 +154,12 @@ export async function checkAndExecuteAccountLiquidation(
 
     // Attempt close with one retry
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const { error: closeErr } = await admin.rpc('close_position', {
-        p_position_id: pos.id,
-        p_user_id: userId,
-        p_ltp: ltp,
-        p_exit_price: exitPrice,
-        p_closed_by: 'AUTO_LIQUIDATION',
-        p_brokerage: carryBrokerage,
+      const { error: closeErr } = await admin.rpc('close_position_v2', {
+        p_position_id:        pos.id,
+        p_close_qty:          Number(pos.qty_open),
+        p_close_price:        exitPrice,
+        p_closed_by:          'LIQUIDATION',
+        p_expected_brokerage: carryBrokerage,
       });
 
       if (!closeErr) return true;

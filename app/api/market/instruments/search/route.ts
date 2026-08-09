@@ -15,12 +15,29 @@ import {
   applyExpiryFilter,
   type Instrument,
 } from '@/lib/filterEngine';
+import { getRedisClient, isRedisMock } from '@/lib/redis';
+import { parseOptionSymbol } from '@/lib/positionStore';
+
+function getUnderlyingId(symbol: string): string {
+  const parsed = parseOptionSymbol(symbol);
+  const u = parsed?.underlying || 'NIFTY';
+  if (u === 'BANKNIFTY') return 'NSE:NIFTY BANK';
+  if (u === 'FINNIFTY') return 'NSE:NIFTY FIN SERVICE';
+  if (u === 'SENSEX') return 'BSE:SENSEX';
+  if (u === 'BANKEX') return 'BSE:BANKEX';
+  if (u === 'MIDCPNIFTY') return 'NSE:NIFTY MID SELECT';
+  if (u === 'NIFTY') return 'NSE:NIFTY 50';
+  return `NSE:${u}`;
+}
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
+
+// ATM kite IDs for underlying index/commodity lookup in Redis — kept for future use
+// const UNDERLYING_KITE_IDS and MCX_UNDERLYINGS removed; search now reads option chain cache directly
 
 // Known underlying symbols for smart parsing
 const UNDERLYINGS = ['MIDCPNIFTY', 'BANKNIFTY', 'FINNIFTY', 'NIFTY', 'SENSEX', 'BANKEX', 'CRUDEOILM', 'CRUDEOIL', 'NATGASMINI', 'NATURALGAS', 'SILVERM', 'SILVER', 'GOLDM', 'GOLD'];
@@ -87,6 +104,21 @@ function parseOptionQuery(q: string): { underlying: string; strike: number; opti
 }
 
 /**
+ * Format YYYY-MM-DD date to DD MMM YYYY (e.g. 26 Jun 2026)
+ */
+function formatUIExpiry(dateStr: string | null): string {
+  if (!dateStr) return '';
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return dateStr;
+  
+  const [, year, month, day] = match;
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthName = monthNames[parseInt(month, 10) - 1];
+  
+  return `${parseInt(day, 10)} ${monthName} ${year}`;
+}
+
+/**
  * Build a human-readable display name from a Zerodha tradingsymbol.
  * e.g. NIFTY26MAY24050CE  →  NIFTY 24050 CE  (19 May 26)
  *      NIFTY2651924050CE  →  NIFTY 24050 CE  (19 May 26)
@@ -94,10 +126,14 @@ function parseOptionQuery(q: string): { underlying: string; strike: number; opti
 function buildDisplayName(tradingsymbol: string, underlying: string, strike: number | null, optionType: string | null, expiry: string | null): string {
   const isRealValue = (v: any) => v !== null && v !== undefined && String(v).toLowerCase() !== 'null' && String(v).trim() !== '';
   
+  const safeUnderlying = isRealValue(underlying) ? underlying : (isRealValue(tradingsymbol) ? tradingsymbol : '');
+
   if (isRealValue(strike) && isRealValue(optionType)) {
     const expLabel = isRealValue(expiry) ? ` (${expiry})` : '';
-    const safeUnderlying = isRealValue(underlying) ? underlying : (isRealValue(tradingsymbol) ? tradingsymbol : '');
     return `${safeUnderlying} ${strike} ${optionType}${expLabel}`.trim();
+  } else if (isRealValue(expiry)) {
+    // Formatting for Futures (has expiry but no strike/optionType)
+    return `${safeUnderlying} FUT (${expiry})`.trim();
   }
   return isRealValue(tradingsymbol) ? tradingsymbol : 'Unknown';
 }
@@ -114,9 +150,13 @@ async function fetchLivePrices(kiteIds: string[], request: NextRequest): Promise
   try {
     // 1. Fetch from Ticker Daemon in-memory quotes API
     try {
-      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : 'http://localhost:8080');
+      const tickerUrl = process.env.NEXT_PUBLIC_TICKER_URL || (process.env.NODE_ENV === 'production' ? 'https://marginapexx-production.up.railway.app' : null);
       const params = new URLSearchParams({ symbols: kiteIds.join(',') });
-      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store' });
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      if (!tickerUrl) throw new Error('No tickerUrl');
+      const resTicker = await fetch(`${tickerUrl}/quotes?${params}`, { cache: 'no-store', signal: AbortSignal.timeout(50) });
       if (resTicker.ok) {
         const json = await resTicker.json();
         if (json.success && json.data) {
@@ -237,14 +277,25 @@ export async function GET(request: NextRequest) {
     const parsed = parseOptionQuery(q);
 
     let allowedSymbols: string[] | null = null;
+    let userSegSettings: any[] = [];
     const user = await getUserFromRequest(request);
     if (user) {
       const adminClient = getAdminClient();
-      const { data: profile } = await adminClient.from('profiles').select('template_id').eq('id', user.id).single();
-      if (profile?.template_id) {
-        const { data: scripts } = await adminClient.from('template_scripts').select('symbol').eq('template_id', profile.template_id);
-        if (scripts && scripts.length > 0) {
-          allowedSymbols = scripts.map(s => s.symbol);
+      const { data: profile } = await adminClient.from('profiles').select('template_id, parent_id, trading_mode').eq('id', user.id).single();
+      if (profile) {
+        if (profile.template_id) {
+          const { data: scripts } = await adminClient.from('template_scripts').select('symbol').eq('template_id', profile.template_id);
+          if (scripts && scripts.length > 0) {
+            allowedSymbols = scripts.map(s => s.symbol);
+          }
+        }
+        const lookupId = profile.parent_id ?? user.id;
+        const targetTable = profile.trading_mode === 'scalper' ? 'scalper_segment_settings' : 'segment_settings';
+        const { data: segSettings } = await adminClient.from(targetTable)
+          .select('segment, side, strike_range')
+          .eq('user_id', lookupId);
+        if (segSettings) {
+          userSegSettings = segSettings;
         }
       }
     }
@@ -405,6 +456,139 @@ export async function GET(request: NextRequest) {
         const activeSet = new Set(activeExpiries);
         filteredOptions = filteredOptions.filter((r: any) => !r.expiry || activeSet.has(r.expiry));
       }
+
+      // ── Per-user strike range (from segment_settings.strike_range) ──────
+      let perUserRangeApplied = false;
+      if (user && userSegSettings.length > 0) {
+        const optionsWithLimit = filteredOptions.filter((r: any) => {
+          if (r.strike_price === null) return false;
+          const dbSeg = mapSegmentToDbSegment(r.segment || r.exchange || '');
+          const setting = userSegSettings.find(s => s.segment === dbSeg);
+          return setting && Number(setting.strike_range || 0) > 0;
+        });
+
+        if (optionsWithLimit.length > 0) {
+          perUserRangeApplied = true;
+          const underlyingIds = Array.from(new Set(optionsWithLimit.map((r: any) => getUnderlyingId(r.tradingsymbol))));
+          const priceMap = await fetchLivePrices(underlyingIds, request);
+
+          filteredOptions = filteredOptions.filter((r: any) => {
+            if (r.strike_price === null) return true;
+            const dbSeg = mapSegmentToDbSegment(r.segment || r.exchange || '');
+            const setting = userSegSettings.find(s => s.segment === dbSeg);
+            const strikeRange = setting ? Number(setting.strike_range || 0) : 0;
+            if (strikeRange <= 0) return true;
+
+            const underlyingId = getUnderlyingId(r.tradingsymbol);
+            const underlyingLtp = priceMap[underlyingId];
+            if (underlyingLtp === undefined || underlyingLtp <= 0) return true;
+
+            const diff = Math.abs(Number(r.strike_price) - underlyingLtp);
+            return diff <= strikeRange;
+          });
+        }
+      }
+
+      // ── Admin-config strike range fallback (matches option chain logic) ─
+      // ── Match option chain exactly: read its Redis cache per underlying ──
+      // The option chain stores its filtered strike list under optionChain:SYMBOL_expiry.
+      // Reading that cache gives us the exact same strikes the user sees there —
+      // no risk of drift from different ATM snapshots or range calculations.
+      if (!perUserRangeApplied && filteredOptions.length > 0) {
+        try {
+          const redis = getRedisClient();
+          if (!isRedisMock()) {
+            // Collect unique underlying names from the options we're about to return
+            const underlyingNames = Array.from(new Set(
+              filteredOptions.map((r: any) => (r.name || r.underlying_symbol || '').toUpperCase()).filter(Boolean)
+            ));
+
+            // Build an allowed tradingsymbol set from every option chain cache entry we can find
+            const allowedSymbols = new Set<string>();
+            let cacheHit = false;
+
+            for (const underlying of underlyingNames) {
+              // Try all cached expiry keys for this underlying
+              const keys = await redis.keys(`optionChain:${underlying}_*`);
+              for (const key of keys) {
+                try {
+                  const cached = await redis.get(key);
+                  if (!cached) continue;
+                  const chain = JSON.parse(cached);
+                  if (chain.strikes && Array.isArray(chain.strikes)) {
+                    for (const s of chain.strikes) {
+                      if (s.ce?.symbol) allowedSymbols.add(s.ce.symbol.toUpperCase());
+                      if (s.pe?.symbol) allowedSymbols.add(s.pe.symbol.toUpperCase());
+                    }
+                    cacheHit = true;
+                  }
+                } catch { /* skip bad cache entry */ }
+              }
+            }
+
+            // Only restrict if we actually got cache data — otherwise apply a dynamic fallback
+            if (cacheHit && allowedSymbols.size > 0) {
+              filteredOptions = filteredOptions.filter((r: any) =>
+                allowedSymbols.has((r.tradingsymbol || '').toUpperCase())
+              );
+            } else {
+              // Fallback: If cache is missing, filter dynamically using 11 strikes centered around the ATM price
+              const underlyingIds = Array.from(new Set(filteredOptions.map((r: any) => getUnderlyingId(r.tradingsymbol))));
+              const priceMap = await fetchLivePrices(underlyingIds, request);
+
+              // Group options by underlying name
+              const groupedOptions: Record<string, any[]> = {};
+              for (const opt of filteredOptions) {
+                const name = (opt.name || opt.underlying_symbol || '').toUpperCase();
+                if (!groupedOptions[name]) groupedOptions[name] = [];
+                groupedOptions[name].push(opt);
+              }
+
+              let finalFilteredOptions: any[] = [];
+              for (const [underlying, opts] of Object.entries(groupedOptions)) {
+                const underlyingId = getUnderlyingId(opts[0].tradingsymbol);
+                const underlyingLtp = priceMap[underlyingId];
+                if (!underlyingLtp || underlyingLtp <= 0) {
+                  finalFilteredOptions.push(...opts);
+                  continue;
+                }
+
+                const uniqueStrikes = Array.from(new Set(opts.map(o => Number(o.strike_price || 0)))).sort((a, b) => a - b);
+                let closestIdx = 0;
+                let minDiff = Infinity;
+                for (let i = 0; i < uniqueStrikes.length; i++) {
+                  const diff = Math.abs(uniqueStrikes[i] - underlyingLtp);
+                  if (diff < minDiff) {
+                    minDiff = diff;
+                    closestIdx = i;
+                  }
+                }
+
+                const rangeCount = 11;
+                const half = Math.floor(rangeCount / 2);
+                let startIdx = closestIdx - half;
+                let endIdx = closestIdx + half;
+
+                if (startIdx < 0) {
+                  endIdx += Math.abs(startIdx);
+                  startIdx = 0;
+                }
+                if (endIdx >= uniqueStrikes.length) {
+                  const excess = endIdx - (uniqueStrikes.length - 1);
+                  startIdx = Math.max(0, startIdx - excess);
+                  endIdx = uniqueStrikes.length - 1;
+                }
+
+                const allowedStrikes = new Set(uniqueStrikes.slice(startIdx, endIdx + 1));
+                finalFilteredOptions.push(...opts.filter(o => allowedStrikes.has(Number(o.strike_price || 0))));
+              }
+              filteredOptions = finalFilteredOptions;
+            }
+          }
+        } catch (e) {
+          console.error('[GET /api/market/instruments/search] Fallback filter error:', e);
+        }
+      }
     }
 
     // Combine all valid rows
@@ -419,6 +603,27 @@ export async function GET(request: NextRequest) {
       }
     }
     validRows = Array.from(uniqueMap.values());
+
+    // Remove future contracts with null expiry if dated versions exist
+    const futMap = new Map<string, any[]>();
+    for (const r of validRows) {
+      if (r.instrument_type?.startsWith('FUT') || ['FUT', 'MAPPED_FUT'].includes(r.instrument_type)) {
+        const key = r.name || r.underlying_symbol || r.tradingsymbol;
+        if (!futMap.has(key)) futMap.set(key, []);
+        futMap.get(key)!.push(r);
+      }
+    }
+    for (const [key, futs] of futMap.entries()) {
+      const hasDated = futs.some(f => f.expiry !== null && f.expiry !== undefined);
+      if (hasDated) {
+        validRows = validRows.filter(r => {
+          if ((r.name || r.underlying_symbol || r.tradingsymbol) === key && (r.instrument_type?.startsWith('FUT') || ['FUT', 'MAPPED_FUT'].includes(r.instrument_type))) {
+            return r.expiry !== null && r.expiry !== undefined;
+          }
+          return true;
+        });
+      }
+    }
 
     // Ranking algorithm
     const qLower = q.toLowerCase();
@@ -469,6 +674,24 @@ export async function GET(request: NextRequest) {
       return (a.tradingsymbol || '').localeCompare(b.tradingsymbol || '');
     });
 
+    // Filter out expired contracts by parsing the date from the symbol (e.g. CRUDEOIL26JUNFUT)
+    validRows = validRows.filter((r: any) => {
+      if (!r.expiry && r.tradingsymbol && r.tradingsymbol.includes('FUT')) {
+        const match = r.tradingsymbol.match(/(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/);
+        if (match) {
+          const year = parseInt(match[1], 10) + 2000;
+          const monthIndex = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'].indexOf(match[2]);
+          
+          // Set to the end of the month for a rough expiry check
+          const roughExpiry = new Date(year, monthIndex + 1, 0);
+          if (roughExpiry < new Date()) {
+            return false; // It's expired
+          }
+        }
+      }
+      return true;
+    });
+
     // We only need the top 50 matches for the UI to stay performant
     validRows = validRows.slice(0, 50);
 
@@ -494,7 +717,17 @@ export async function GET(request: NextRequest) {
       } else if (type === 'EQ') {
         segmentLabel = `${exch} - Equity`;
       } else {
-        segmentLabel = inst.segment || inst.exchange || '';
+        // Robust fallback by inspecting the tradingsymbol
+        const symUpper = (inst.tradingsymbol || '').toUpperCase();
+        if (symUpper.includes('CE') || symUpper.includes('PE') || symUpper.includes('OPT')) {
+          if (['NSE', 'BSE'].includes(exch)) segmentLabel = isIndex ? `${exch} - Options` : `${exch} - Stock Options`;
+          else segmentLabel = `${exch} - Options`;
+        } else if (symUpper.includes('FUT')) {
+          if (['NSE', 'BSE'].includes(exch)) segmentLabel = isIndex ? `${exch} - Futures` : `${exch} - Stock Futures`;
+          else segmentLabel = `${exch} - Futures`;
+        } else {
+          segmentLabel = inst.segment || inst.exchange || '';
+        }
       }
 
       const kiteId = `${inst.exchange}:${inst.tradingsymbol}`;
@@ -505,7 +738,7 @@ export async function GET(request: NextRequest) {
         inst.underlying_symbol || inst.name || inst.tradingsymbol,
         inst.strike_price ?? null,
         inst.option_type ?? null,
-        null,
+        formatUIExpiry(inst.expiry) || null,
       );
 
       return {
@@ -515,7 +748,7 @@ export async function GET(request: NextRequest) {
         price: livePrice,
         change: '0%',
         segment: segmentLabel,
-        contractDate: inst.expiry || '',
+        contractDate: formatUIExpiry(inst.expiry) || '',
         open: 0,
         high: 0,
         low: 0,
@@ -534,7 +767,15 @@ export async function GET(request: NextRequest) {
           .eq('user_id', user.id);
         if (blockedRows && blockedRows.length > 0) {
           const blockedSet = new Set(blockedRows.map((r: any) => r.symbol.toUpperCase()));
-          results = results.filter(r => !blockedSet.has((r.symbol || '').toUpperCase()));
+          results = results.filter(r => {
+            const sym = (r.symbol || '').toUpperCase();
+            const name = (r.name || '').toUpperCase();
+            if (blockedSet.has(sym) || blockedSet.has(name)) return false;
+            for (const blocked of blockedSet) {
+              if (sym.startsWith(blocked)) return false;
+            }
+            return true;
+          });
         }
 
         // Also filter out entire segments if they are blocked (trade_allowed = false)
@@ -555,6 +796,37 @@ export async function GET(request: NextRequest) {
         // Non-fatal — if we can't fetch blocked scripts, show all results
       }
     }
+
+    // Append matching COMEX items if search query matches name, symbol, or 'comex'
+    const comexSearchItems = [
+      { name: 'GOLD', symbol: 'GC=F', comexSymbol: 'GC=F', segment: 'COMEX - Futures' },
+      { name: 'SILVER', symbol: 'SI=F', comexSymbol: 'SI=F', segment: 'COMEX - Futures' },
+      { name: 'CRUDEOIL', symbol: 'CL=F', comexSymbol: 'CL=F', segment: 'COMEX - Futures' },
+      { name: 'COPPER', symbol: 'HG=F', comexSymbol: 'HG=F', segment: 'COMEX - Futures' },
+      { name: 'NATURALGAS', symbol: 'NG=F', comexSymbol: 'NG=F', segment: 'COMEX - Futures' },
+    ];
+    const comexSearchTerms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const matchingComex = comexSearchItems
+      .filter(item => {
+        const itemText = `${item.name} ${item.symbol} ${item.segment} comex`.toLowerCase();
+        return comexSearchTerms.every(term => itemText.includes(term));
+      })
+      .map(item => ({
+        name: item.name,
+        symbol: item.symbol,
+        kiteSymbol: '', // Pure COMEX has no kiteSymbol
+        comexSymbol: item.comexSymbol,
+        price: 0,
+        change: '0%',
+        segment: item.segment,
+        contractDate: 'Continuous',
+        open: 0,
+        high: 0,
+        low: 0,
+        close: 0,
+      }));
+
+    results.push(...matchingComex);
 
     return NextResponse.json(results);
   } catch (err: any) {

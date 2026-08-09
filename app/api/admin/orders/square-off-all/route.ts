@@ -12,7 +12,7 @@
  * No brokerage is charged on emergency admin square-offs.
  */
 import { requireAdmin } from '../../_auth';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -77,23 +77,25 @@ export async function POST(request: Request): Promise<Response> {
       exitPrice = Math.round(exitPrice * 100) / 100;
 
       // Carry brokerage deferred to exit
-      const carryBrokerage = calculateCarryBrokerage({
-        productType: pos.product_type,
-        qty: Number(pos.qty_open),
-        entryPrice: Number(pos.entry_price),
-        carryCommissionType: bufSettings?.carry_commission_type,
-        carryCommissionValue: bufSettings?.carry_commission_value,
-        commissionType: bufSettings?.commission_type,
-        commissionValue: bufSettings?.commission_value,
-      });
+      let carryBrokerage = 0;
+      if (!pos.carry_brokerage_paid) {
+        carryBrokerage = calculateCarryBrokerage({
+          productType: pos.product_type,
+          qty: Number(pos.qty_open),
+          entryPrice: Number(pos.entry_price),
+          carryCommissionType: bufSettings?.carry_commission_type,
+          carryCommissionValue: bufSettings?.carry_commission_value,
+          commissionType: bufSettings?.commission_type,
+          commissionValue: bufSettings?.commission_value,
+        });
+      }
 
-      const { error: rpcErr } = await adminClient.rpc('close_position', {
-        p_position_id: pos.id,
-        p_user_id: pos.user_id,
-        p_ltp: baseLtp,
-        p_exit_price: exitPrice,
-        p_closed_by: 'ADMIN_SQOFF_ALL',
-        p_brokerage: carryBrokerage,
+      const { error: rpcErr } = await adminClient.rpc('close_position_v2', {
+        p_position_id:        pos.id,
+        p_close_qty:          Number(pos.qty_open),
+        p_close_price:        exitPrice,
+        p_closed_by:          'ADMIN',
+        p_expected_brokerage: carryBrokerage,
       });
 
       if (rpcErr) {
@@ -118,3 +120,4 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
+

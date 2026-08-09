@@ -1,10 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChartController } from './core/ChartController';
-import { Candle, Timeframe } from './types';
-import { SMAIndicator } from './indicators/SMAIndicator';
-import { EMAIndicator } from './indicators/EMAIndicator';
-import { RSIIndicator } from './indicators/RSIIndicator';
-import { MACDIndicator } from './indicators/MACDIndicator';
+// import type { IChartingLibraryWidget } from '@/public/charting_library/charting_library';
+import { Datafeed } from '@/lib/datafeed/Datafeed';
+import { toUdfResolution, CHART_TYPE_MAP } from '@/lib/datafeed/resolutionUtils';
+import { Candle, Timeframe } from '@/components/chart/types';
+import AnimatedLoader from '@/components/AnimatedLoader';
+
+// ─── Supporting types ────────────────────────────────────────────────────────
+
+interface PendingChanges {
+  symbol?: string;
+  timeframe?: Timeframe;
+  chartType?: 'candle' | 'area' | 'bar' | 'baseline';
+  theme?: 'dark' | 'light';
+  indicators?: boolean;
+}
+
+type IndicatorKey = 'sma' | 'ema' | 'rsi' | 'macd';
+type IndicatorEntityIds = Record<IndicatorKey, string | null>;
+
+// ─── Props interface (must match TradingChart.tsx exactly) ───────────────────
 
 interface ChartContainerProps {
   symbol: string;
@@ -15,37 +29,19 @@ interface ChartContainerProps {
   liveQuote?: any;
   loading: boolean;
   error: string | null;
-  activeIndicators: {
-    sma: boolean;
-    ema: boolean;
-    rsi: boolean;
-    macd: boolean;
-  };
-  setActiveIndicators: React.Dispatch<React.SetStateAction<{
-    sma: boolean;
-    ema: boolean;
-    rsi: boolean;
-    macd: boolean;
-  }>>;
-  settings: {
-    smaPeriod: number;
-    emaPeriod: number;
-    rsiPeriod: number;
-    macdFast: number;
-    macdSlow: number;
-    macdSignal: number;
-  };
-  setSettings: React.Dispatch<React.SetStateAction<{
-    smaPeriod: number;
-    emaPeriod: number;
-    rsiPeriod: number;
-    macdFast: number;
-    macdSlow: number;
-    macdSignal: number;
-  }>>;
-  showSettingsModal: boolean;
-  setShowSettingsModal: React.Dispatch<React.SetStateAction<boolean>>;
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function getIsDark(): boolean {
+  if (typeof document === 'undefined') return true;
+  return (
+    document.body.classList.contains('dark') ||
+    document.body.classList.contains('black')
+  );
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ChartContainer({
   symbol,
@@ -56,506 +52,268 @@ export default function ChartContainer({
   liveQuote,
   loading,
   error,
-  activeIndicators,
-  setActiveIndicators,
-  settings,
-  setSettings,
-  showSettingsModal,
-  setShowSettingsModal
 }: ChartContainerProps) {
+  // ── Refs ──────────────────────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null);
-  const controllerRef = useRef<ChartController | null>(null);
+  const tvWidgetRef = useRef<any | null>(null);
+  const datafeedRef = useRef<Datafeed | null>(null);
+  const isReadyRef = useRef(false);
+  const pendingRef = useRef<PendingChanges>({});
+  const initTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'indicators' | 'settings'>('indicators');
+  // ── State (drives overlay rendering only) ─────────────────────────────────
+  const [chartStatus, setChartStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [chartError, setChartError] = useState<string | null>(null);
+  const [isDark, setIsDark] = useState(getIsDark);
 
-  // Detect theme class on body
-  const getIsDark = () => {
-    if (typeof document === 'undefined') return true;
-    return document.body.classList.contains('dark') || document.body.classList.contains('black');
-  };
-  const [isDark, setIsDark] = useState(getIsDark());
+  // ── Native Toolbar Listeners ─────────────────────────────────────────────
+  useEffect(() => {
+    const handleShowIndicators = () => {
+      if (isReadyRef.current && tvWidgetRef.current) {
+        tvWidgetRef.current.chart().executeActionById('insertIndicator');
+      }
+    };
+    const handleToggleDrawings = () => {
+      if (isReadyRef.current && tvWidgetRef.current) {
+        tvWidgetRef.current.chart().executeActionById('drawingToolbarAction');
+      }
+    };
+    document.addEventListener('tv-show-indicators', handleShowIndicators);
+    document.addEventListener('tv-toggle-drawings', handleToggleDrawings);
+    return () => {
+      document.removeEventListener('tv-show-indicators', handleShowIndicators);
+      document.removeEventListener('tv-toggle-drawings', handleToggleDrawings);
+    };
+  }, []);
 
-  // Watch for theme class additions on body
+
+
+  // ── Task 8.2: Widget initialization — runs ONCE on mount ─────────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const initWidget = () => {
+      if (!containerRef.current || tvWidgetRef.current) return;
+
+      datafeedRef.current = new Datafeed(segment);
+
+      let savedData;
+      try {
+        const stored = localStorage.getItem('marginapexx_tv_layout');
+        if (stored) {
+          savedData = JSON.parse(stored);
+        }
+      } catch (e) {
+        console.error('Failed to parse saved chart layout:', e);
+      }
+
+      tvWidgetRef.current = new window.TradingView.widget({
+        container: containerRef.current,
+        symbol,
+        interval: toUdfResolution(timeframe) as any,
+        datafeed: datafeedRef.current,
+        library_path: '/charting_library/',
+        locale: 'en',
+        timezone: 'Asia/Kolkata',
+        theme: isDark ? 'dark' : 'light',
+        autosize: true,
+        saved_data: savedData,
+        client_id: 'marginapexx',
+        user_id: 'public_user',
+        auto_save_delay: 1,
+        disabled_features: ['timeframes_toolbar', 'countdown', 'header_widget'],
+        enabled_features: [],
+        overrides: {
+          "mainSeriesProperties.showCountdown": false
+        }
+      });
+
+      tvWidgetRef.current.onChartReady(onChartReady);
+    };
+
+    const onChartReady = () => {
+      if (initTimerRef.current) {
+        clearTimeout(initTimerRef.current);
+        initTimerRef.current = null;
+      }
+      isReadyRef.current = true;
+      setChartStatus('ready');
+
+      // Inject CSS directly to hide native header in case feature flags or custom CSS fail
+      try {
+        const iframe = containerRef.current?.querySelector('iframe');
+        if (iframe && iframe.contentDocument) {
+          const style = iframe.contentDocument.createElement('style');
+          style.innerHTML = '.layout__area--top { display: none !important; } .header-chart-panel { display: none !important; }';
+          iframe.contentDocument.head.appendChild(style);
+        }
+      } catch (e) {
+        console.error('Failed to inject CSS into TV iframe', e);
+      }
+
+      // Drain the pending queue
+      const pending = pendingRef.current;
+      if (pending.symbol) {
+        tvWidgetRef.current?.chart().setSymbol(pending.symbol);
+      }
+      if (pending.timeframe) {
+        tvWidgetRef.current?.chart().setResolution(toUdfResolution(pending.timeframe) as any);
+      }
+      if (pending.chartType) {
+        tvWidgetRef.current?.chart().setChartType(CHART_TYPE_MAP[pending.chartType] as any);
+      }
+      if (pending.theme) {
+        tvWidgetRef.current?.changeTheme(pending.theme);
+      }
+      pendingRef.current = {};
+
+      const saveChartState = () => {
+        if (!tvWidgetRef.current) return;
+        try {
+          tvWidgetRef.current.save((state: any) => {
+            if (state) {
+              localStorage.setItem('marginapexx_tv_layout', JSON.stringify(state));
+            }
+          });
+        } catch (e) {
+          console.error('Failed to save chart layout:', e);
+        }
+      };
+
+      // Subscribe to auto save and drawing/indicator changes
+      tvWidgetRef.current?.subscribe('onAutoSaveNeeded', saveChartState);
+      tvWidgetRef.current?.subscribe('drawing_event', saveChartState);
+      tvWidgetRef.current?.subscribe('study_event', saveChartState);
+    };
+
+    // Arm 30-second timeout
+    initTimerRef.current = setTimeout(() => {
+      setChartStatus('error');
+      setChartError('Chart failed to initialize. Please refresh the page.');
+    }, 30_000);
+
+    if (window.TradingView) {
+      initWidget();
+    } else {
+      const script = document.createElement('script');
+      script.src = '/charting_library/charting_library.standalone.js';
+      script.onload = initWidget;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      if (initTimerRef.current) {
+        clearTimeout(initTimerRef.current);
+        initTimerRef.current = null;
+      }
+      tvWidgetRef.current?.remove();
+      tvWidgetRef.current = null;
+      datafeedRef.current = null;
+      isReadyRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Task 8.3: symbol, timeframe, chartType effects ───────────────────────
+
+  useEffect(() => {
+    if (!isReadyRef.current) { pendingRef.current.symbol = symbol; return; }
+    tvWidgetRef.current?.chart().setSymbol(symbol);
+  }, [symbol]);
+
+  useEffect(() => {
+    if (datafeedRef.current) {
+      datafeedRef.current.setSegment(segment);
+    }
+  }, [segment]);
+
+  useEffect(() => {
+    if (!isReadyRef.current) { pendingRef.current.timeframe = timeframe; return; }
+    tvWidgetRef.current?.chart().setResolution(toUdfResolution(timeframe) as any);
+  }, [timeframe]);
+
+  useEffect(() => {
+    if (!isReadyRef.current) { pendingRef.current.chartType = chartType; return; }
+    tvWidgetRef.current?.chart().setChartType(CHART_TYPE_MAP[chartType] as any);
+  }, [chartType]);
+
+  // ── Task 8.5: Live quote forwarding ──────────────────────────────────────
+
+  useEffect(() => {
+    let lastPrice = liveQuote?.lastPrice ?? liveQuote?.last_price;
+    if (lastPrice !== undefined) lastPrice = Number(lastPrice);
+
+    let volume = liveQuote?.volume ?? liveQuote?.v;
+    if (volume !== undefined) volume = Number(volume);
+
+    let nowMs = liveQuote?.timestamp ? new Date(liveQuote.timestamp).getTime() : Date.now();
+    if (nowMs !== undefined) nowMs = Number(nowMs);
+
+    if (loading || candles.length === 0) return;
+    if (!lastPrice || !isFinite(lastPrice) || lastPrice <= 0) return;
+
+    datafeedRef.current?.updateLive(lastPrice, nowMs, volume);
+  }, [liveQuote]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Task 8.5: Theme sync via MutationObserver ─────────────────────────────
+
   useEffect(() => {
     const observer = new MutationObserver(() => {
       const dark = getIsDark();
       setIsDark(dark);
-      if (controllerRef.current) {
-        controllerRef.current.setTheme(dark);
-      }
+      const theme = dark ? 'dark' : 'light';
+      if (!isReadyRef.current) { pendingRef.current.theme = theme; return; }
+      tvWidgetRef.current?.changeTheme(theme);
     });
-
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     return () => observer.disconnect();
   }, []);
 
-  // Initialize/recreate ChartController when symbol/segment changes
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    // Clean up previous controller
-    if (controllerRef.current) {
-      controllerRef.current.destroy();
-      controllerRef.current = null;
-    }
-
-    try {
-      const controller = new ChartController({
-        container: containerRef.current,
-        symbol,
-        segment,
-        isDarkMode: isDark
-      });
-      controllerRef.current = controller;
-    } catch (e) {
-      console.error('Failed to initialize ChartController:', e);
-      return;
-    }
-
-    // Apply indicators according to active state
-    if (controllerRef.current) {
-      applyActiveIndicators(controllerRef.current);
-    }
-
-    // Set up ResizeObserver to handle container resizing
-    const resizeObserver = new ResizeObserver(entries => {
-      if (!entries.length || !containerRef.current) return;
-      const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0) {
-        controllerRef.current?.resizeToContainer(width, height);
-      }
-    });
-    resizeObserver.observe(containerRef.current);
-
-    return () => {
-      resizeObserver.disconnect();
-      if (controllerRef.current) {
-        controllerRef.current.destroy();
-        controllerRef.current = null;
-      }
-    };
-  }, [symbol, segment]);
-
-  // Load historical candles when they are loaded/updated
-  useEffect(() => {
-    if (controllerRef.current && candles.length > 0 && !loading) {
-      controllerRef.current.loadHistoricalData(candles);
-      // Re-apply indicators to refresh historical calculations
-      applyActiveIndicators(controllerRef.current);
-    }
-  }, [candles, loading]);
-
-  // Update chart type
-  useEffect(() => {
-    if (controllerRef.current) {
-      controllerRef.current.setChartType(chartType);
-    }
-  }, [chartType]);
-
-  // Monitor settings or indicator toggle modifications
-  useEffect(() => {
-    if (controllerRef.current) {
-      applyActiveIndicators(controllerRef.current);
-    }
-  }, [activeIndicators, settings]);
-
-  // Handle incoming real-time quote feeds
-  useEffect(() => {
-    if (!liveQuote || !controllerRef.current || loading || candles.length === 0) return;
-
-    const lastPrice = liveQuote.lastPrice || liveQuote.last_price;
-    if (!lastPrice) return;
-
-    controllerRef.current.updateLiveTick(lastPrice, Date.now(), timeframe);
-  }, [liveQuote, timeframe, loading]);
-
-  const applyActiveIndicators = (ctrl: ChartController) => {
-    const manager = ctrl.getIndicatorManager();
-    
-    // SMA
-    if (activeIndicators.sma) {
-      manager.addIndicator('sma', new SMAIndicator('sma', { period: settings.smaPeriod, source: 'close' }, 0), ['#2962FF']);
-    } else {
-      manager.removeIndicator('sma');
-    }
-
-    // EMA
-    if (activeIndicators.ema) {
-      manager.addIndicator('ema', new EMAIndicator('ema', { period: settings.emaPeriod, source: 'close' }, 0), ['#FF6D00']);
-    } else {
-      manager.removeIndicator('ema');
-    }
-
-    // RSI
-    if (activeIndicators.rsi) {
-      manager.addIndicator('rsi', new RSIIndicator('rsi', { period: settings.rsiPeriod }, 1), ['#9c27b0']);
-    } else {
-      manager.removeIndicator('rsi');
-    }
-
-    // MACD
-    if (activeIndicators.macd) {
-      manager.addIndicator('macd', new MACDIndicator('macd', {
-        fastPeriod: settings.macdFast,
-        slowPeriod: settings.macdSlow,
-        signalPeriod: settings.macdSignal
-      }, 2), ['#2962FF', '#FF6D00', '#26a69a']);
-    } else {
-      manager.removeIndicator('macd');
-    }
-
-    // Re-initialize indicator values over the loaded candle range
-    if (candles.length > 0) {
-      manager.initialize(candles);
-    }
-  };
-
-  const handleIndicatorToggle = (key: 'sma' | 'ema' | 'rsi' | 'macd') => {
-    setActiveIndicators(prev => ({
-      ...prev,
-      [key]: !prev[key]
-    }));
-  };
-
-  const handleSettingChange = (key: string, value: number) => {
-    setSettings(prev => ({
-      ...prev,
-      [key]: value
-    }));
-  };
+  // ── Task 8.6: Render ──────────────────────────────────────────────────────
 
   return (
-    <div style={{ flex: 1, width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-      
-      {/* Indicator overlay buttons inside top toolbar area */}
-      <div style={{
-        position: 'absolute',
-        top: '12px',
-        right: '12px',
-        zIndex: 50,
-        display: 'none',
-        gap: '6px'
-      }}>
-        <button
-          onClick={() => { setShowSettingsModal(true); setActiveTab('indicators'); }}
-          style={{
-            background: isDark ? 'rgba(30, 34, 45, 0.8)' : 'rgba(255, 255, 255, 0.8)',
-            border: `1px solid ${isDark ? '#2A2E39' : '#E0E3EB'}`,
-            borderRadius: '20px',
-            padding: '6px 12px',
-            fontSize: '11px',
-            fontWeight: 700,
-            color: isDark ? '#D1D4DC' : '#131722',
-            cursor: 'pointer',
-            backdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M1 9 L5 5 L8 7 L15 1"/>
-          </svg>
-          Indicators Settings
-        </button>
-      </div>
+    <div style={{ position: 'relative', flex: 1, width: '100%', height: '100%', overflow: 'hidden' }}>
 
-      {loading && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: isDark ? 'rgba(7, 24, 36, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}>
-          <div style={{ color: isDark ? '#D1D4DC' : '#131722', fontSize: '13px', fontWeight: 600 }}>Loading chart data...</div>
-        </div>
-      )}
+      {/* Widget mount target */}
+      <div
+        ref={containerRef}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, height: '100%' }}
+      />
 
-      {error && !loading && candles.length === 0 && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ color: '#F23645', fontSize: '13px', fontWeight: 600, maxWidth: '80%', textAlign: 'center' }}>{error}</div>
-        </div>
-      )}
-
-      {/* Main Chart container target */}
-      <div ref={containerRef} style={{ flex: 1, width: '100%' }} />
-
-      {/* Modern Settings Modal */}
-      {showSettingsModal && (
+      {/* Loading overlay */}
+      {chartStatus === 'loading' && (
         <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0,0,0,0.4)',
-          zIndex: 99999,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backdropFilter: 'blur(2px)'
+          position: 'absolute', inset: 0, zIndex: 10,
+          background: isDark ? 'rgba(7, 24, 36, 0.85)' : 'rgba(255, 255, 255, 0.85)',
         }}>
-          <div style={{
-            background: isDark ? '#1e222d' : '#ffffff',
-            border: `1px solid ${isDark ? '#2A2E39' : '#E0E3EB'}`,
-            borderRadius: '16px',
-            width: '90%',
-            maxWidth: '380px',
-            boxShadow: '0 12px 36px rgba(0,0,0,0.3)',
-            overflow: 'hidden',
-            fontFamily: 'Inter, sans-serif'
-          }}>
-            {/* Header */}
-            <div style={{
-              display: 'flex',
-              borderBottom: `1px solid ${isDark ? '#2A2E39' : '#E0E3EB'}`,
-              padding: '4px 8px',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
-              <div style={{ display: 'flex' }}>
-                <button
-                  onClick={() => setActiveTab('indicators')}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: '12px 16px',
-                    color: activeTab === 'indicators' ? '#2962FF' : (isDark ? '#8B92A8' : '#6B7280'),
-                    borderBottom: activeTab === 'indicators' ? '2px solid #2962FF' : 'none',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    fontSize: '13px'
-                  }}
-                >
-                  Toggle Indicators
-                </button>
-                <button
-                  onClick={() => setActiveTab('settings')}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: '12px 16px',
-                    color: activeTab === 'settings' ? '#2962FF' : (isDark ? '#8B92A8' : '#6B7280'),
-                    borderBottom: activeTab === 'settings' ? '2px solid #2962FF' : 'none',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    fontSize: '13px'
-                  }}
-                >
-                  Configure Periods
-                </button>
-              </div>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: isDark ? '#D1D4DC' : '#131722',
-                  fontSize: '18px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  padding: '8px 12px'
-                }}
-              >
-                ×
-              </button>
-            </div>
+          <AnimatedLoader text="Loading chart data..." fullScreen={false} />
+        </div>
+      )}
 
-            {/* Content body */}
-            <div style={{ padding: '16px', maxHeight: '300px', overflowY: 'auto' }}>
-              {activeTab === 'indicators' ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {Object.entries(activeIndicators).map(([key, isActive]) => (
-                    <div
-                      key={key}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '10px 14px',
-                        background: isDark ? '#151924' : '#F5F7FB',
-                        borderRadius: '10px',
-                        border: `1px solid ${isDark ? '#2A2E39' : '#E8ECF0'}`
-                      }}
-                    >
-                      <span style={{
-                        fontSize: '13px',
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                        color: isDark ? '#D1D4DC' : '#0A2540'
-                      }}>
-                        {key === 'sma' ? 'Simple Moving Average (SMA)' :
-                         key === 'ema' ? 'Exponential Moving Average (EMA)' :
-                         key === 'rsi' ? 'Relative Strength Index (RSI)' :
-                         'MACD Lines & Histogram'}
-                      </span>
-                      <button
-                        onClick={() => handleIndicatorToggle(key as any)}
-                        style={{
-                          background: isActive ? '#1db954' : (isDark ? '#2A2E39' : '#E8ECF0'),
-                          border: 'none',
-                          borderRadius: '12px',
-                          color: '#fff',
-                          padding: '6px 12px',
-                          fontSize: '10px',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          letterSpacing: '0.4px'
-                        }}
-                      >
-                        {isActive ? 'ENABLED' : 'DISABLED'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  
-                  {/* SMA settings */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '11px', fontWeight: 700, color: isDark ? '#8B92A8' : '#555', textTransform: 'uppercase' }}>SMA Period</label>
-                    <input
-                      type="number"
-                      value={settings.smaPeriod}
-                      onChange={(e) => handleSettingChange('smaPeriod', Math.max(1, parseInt(e.target.value) || 1))}
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: '8px',
-                        border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                        background: isDark ? '#151924' : '#ffffff',
-                        color: isDark ? '#ffffff' : '#000000',
-                        outline: 'none',
-                        fontSize: '13px',
-                        fontWeight: 700
-                      }}
-                    />
-                  </div>
-
-                  {/* EMA settings */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '11px', fontWeight: 700, color: isDark ? '#8B92A8' : '#555', textTransform: 'uppercase' }}>EMA Period</label>
-                    <input
-                      type="number"
-                      value={settings.emaPeriod}
-                      onChange={(e) => handleSettingChange('emaPeriod', Math.max(1, parseInt(e.target.value) || 1))}
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: '8px',
-                        border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                        background: isDark ? '#151924' : '#ffffff',
-                        color: isDark ? '#ffffff' : '#000000',
-                        outline: 'none',
-                        fontSize: '13px',
-                        fontWeight: 700
-                      }}
-                    />
-                  </div>
-
-                  {/* RSI settings */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '11px', fontWeight: 700, color: isDark ? '#8B92A8' : '#555', textTransform: 'uppercase' }}>RSI Period</label>
-                    <input
-                      type="number"
-                      value={settings.rsiPeriod}
-                      onChange={(e) => handleSettingChange('rsiPeriod', Math.max(1, parseInt(e.target.value) || 1))}
-                      style={{
-                        padding: '8px 12px',
-                        borderRadius: '8px',
-                        border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                        background: isDark ? '#151924' : '#ffffff',
-                        color: isDark ? '#ffffff' : '#000000',
-                        outline: 'none',
-                        fontSize: '13px',
-                        fontWeight: 700
-                      }}
-                    />
-                  </div>
-
-                  {/* MACD settings */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '11px', fontWeight: 700, color: isDark ? '#8B92A8' : '#555', textTransform: 'uppercase' }}>MACD Parameters (Fast, Slow, Signal)</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <input
-                        type="number"
-                        placeholder="Fast"
-                        value={settings.macdFast}
-                        onChange={(e) => handleSettingChange('macdFast', Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{
-                          flex: 1,
-                          padding: '8px 6px',
-                          borderRadius: '8px',
-                          border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                          background: isDark ? '#151924' : '#ffffff',
-                          color: isDark ? '#ffffff' : '#000000',
-                          outline: 'none',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          textAlign: 'center'
-                        }}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Slow"
-                        value={settings.macdSlow}
-                        onChange={(e) => handleSettingChange('macdSlow', Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{
-                          flex: 1,
-                          padding: '8px 6px',
-                          borderRadius: '8px',
-                          border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                          background: isDark ? '#151924' : '#ffffff',
-                          color: isDark ? '#ffffff' : '#000000',
-                          outline: 'none',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          textAlign: 'center'
-                        }}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Signal"
-                        value={settings.macdSignal}
-                        onChange={(e) => handleSettingChange('macdSignal', Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{
-                          flex: 1,
-                          padding: '8px 6px',
-                          borderRadius: '8px',
-                          border: `1px solid ${isDark ? '#2A2E39' : '#CBD5E1'}`,
-                          background: isDark ? '#151924' : '#ffffff',
-                          color: isDark ? '#ffffff' : '#000000',
-                          outline: 'none',
-                          fontSize: '13px',
-                          fontWeight: 700,
-                          textAlign: 'center'
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div style={{
-              borderTop: `1px solid ${isDark ? '#2A2E39' : '#E0E3EB'}`,
-              padding: '12px 16px',
-              textAlign: 'right'
-            }}>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                style={{
-                  background: '#2962FF',
-                  border: 'none',
-                  borderRadius: '30px',
-                  color: '#fff',
-                  padding: '8px 20px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                Apply & Close
-              </button>
-            </div>
-
+      {/* Error overlay (widget-level error or timeout) */}
+      {chartStatus === 'error' && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 10,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{ color: '#F23645', fontSize: '13px', fontWeight: 600, maxWidth: '80%', textAlign: 'center' }}>
+            {chartError}
           </div>
         </div>
       )}
 
+      {/* Error prop text (data fetch error — no candles yet) */}
+      {error !== null && !loading && candles.length === 0 && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 10,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: isDark ? '#071824' : '#FFFFFF',
+        }}>
+          <div style={{ color: '#F23645', fontSize: '13px', fontWeight: 600, maxWidth: '80%', textAlign: 'center' }}>
+            {error}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

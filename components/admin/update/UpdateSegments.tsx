@@ -1,7 +1,8 @@
-'use client';
+﻿'use client';
 import React, { useState, useEffect } from 'react';
 import { signOut } from '@/lib/auth';
 import { apiCall, Toast, ToastState, UserListItem } from '../AdminUtils';
+import AnimatedLoader from '@/components/AnimatedLoader';
 
 const ALL_SEGMENTS = ['INDEX-FUT', 'STOCK-OPT', 'NSE-EQ', 'COMEX', 'INDEX-OPT', 'MCX-FUT', 'CRYPTO', 'STOCK-FUT', 'MCX-OPT', 'FOREX'];
 
@@ -93,7 +94,7 @@ function SegmentBlock({
       >
         <span className="adm-upd-seg-name" style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
           {name}
-          <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ fontSize: '0.8rem', color: '#8b949e' }}></i>
+          <i className={`fas fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ fontSize: '0.8rem', color: '#6b7280' }}></i>
         </span>
         
         {/* Copy From Button */}
@@ -112,8 +113,8 @@ function SegmentBlock({
                 position: 'absolute',
                 right: 0,
                 top: 'calc(100% + 5px)',
-                background: '#161b22',
-                border: '1px solid #30363d',
+                background: '#f9fafb',
+                border: '1px solid #e5e7eb',
                 borderRadius: '8px',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
                 zIndex: 10,
@@ -124,9 +125,9 @@ function SegmentBlock({
               }}
               onMouseLeave={() => setShowCopyDropdown(false)}
             >
-              <div style={{ padding: '6px 12px', fontSize: '11px', color: '#8b949e', borderBottom: '1px solid #30363d', fontWeight: 600 }}>Select Segment</div>
+              <div style={{ padding: '6px 12px', fontSize: '11px', color: '#6b7280', borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>Select Segment</div>
               {availableBlocks.filter(b => b !== name).length === 0 ? (
-                <div style={{ padding: '8px 12px', fontSize: '12px', color: '#8b949e' }}>No other segments</div>
+                <div style={{ padding: '8px 12px', fontSize: '12px', color: '#6b7280' }}>No other segments</div>
               ) : (
                 availableBlocks.filter(b => b !== name).map(b => (
                   <button
@@ -140,13 +141,13 @@ function SegmentBlock({
                       padding: '8px 12px',
                       background: 'transparent',
                       border: 'none',
-                      color: '#c9d1d9',
+                      color: '#374151',
                       textAlign: 'left',
                       fontSize: '12px',
                       cursor: 'pointer',
                       transition: 'background 0.2s',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = '#21262d'}
+                    onMouseEnter={e => e.currentTarget.style.background = '#f3f4f6'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                     {b}
@@ -246,7 +247,7 @@ function SegmentBlock({
               <select className="adm-upd-input adm-upd-select" value={value.intradayType} onChange={e => upd('intradayType', e.target.value)}>
                 <option>Multiplier</option><option value="%">%</option><option>Fixed</option>
               </select>
-              <span style={{ fontSize: '10px', color: '#8b949e', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
+              <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
                 {value.intradayType === '%'
                   ? 'Req Funds = (Qty × Price) × (Leverage / 100)'
                   : value.intradayType === 'Fixed'
@@ -275,7 +276,7 @@ function SegmentBlock({
               <select className="adm-upd-input adm-upd-select" value={value.holdingType} onChange={e => upd('holdingType', e.target.value)}>
                 <option>Multiplier</option><option value="%">%</option><option>Fixed</option>
               </select>
-              <span style={{ fontSize: '10px', color: '#8b949e', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
+              <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
                 {value.holdingType === '%'
                   ? 'Req Funds = (Qty × Price) × (Leverage / 100)'
                   : value.holdingType === 'Fixed'
@@ -314,7 +315,7 @@ function SegmentBlock({
             <div className="adm-upd-field">
               <label className="adm-upd-label">Top Price Limit (%)</label>
               <input className="adm-upd-input" type="number" step="0.1" value={value.topLimit} onChange={e => upd('topLimit', e.target.value)} />
-              <span style={{ fontSize: '10px', color: '#8b949e', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
+              <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
                 {name.endsWith('-SELL') 
                   ? 'Max Sell Limit Price = LTP - Top Limit% (0% = sell at LTP or lower only)'
                   : 'Max Buy Limit Price = LTP + Top Limit% (0% = buy at LTP or lower only)'}
@@ -323,7 +324,7 @@ function SegmentBlock({
             <div className="adm-upd-field">
               <label className="adm-upd-label">Min Price Limit (%)</label>
               <input className="adm-upd-input" type="number" step="0.1" value={value.minLimit} onChange={e => upd('minLimit', e.target.value)} />
-              <span style={{ fontSize: '10px', color: '#8b949e', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
+              <span style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px', display: 'block', lineHeight: '1.4' }}>
                 {name.endsWith('-SELL')
                   ? 'Min Sell Limit Price = LTP - Min Limit% (0% = disabled)'
                   : 'Min Buy Limit Price = LTP - Min Limit% (0% = disabled)'}
@@ -535,7 +536,11 @@ export default function UpdateSegments({ selectedUser }: { selectedUser: { id: s
     setToast({ message: `${segmentMode === 'scalper' ? 'Scalper' : 'Normal'} segment settings saved successfully`, type: 'success' });
   };
 
-  if (loading) return <div style={{ color: '#8b949e', padding: 20 }}>Loading...</div>;
+  if (loading) return (
+    <div style={{ padding: '40px 0', width: '100%' }}>
+      <AnimatedLoader text="Loading segments..." fullScreen={false} />
+    </div>
+  );
 
   return (
     <div className="adm-upd-root" style={{ padding: '0 0 40px 0' }}>
@@ -554,7 +559,7 @@ export default function UpdateSegments({ selectedUser }: { selectedUser: { id: s
           </button>
           <i 
             className="fas fa-bars" 
-            style={{ color: '#8b949e', fontSize: '1.2rem', cursor: 'pointer' }}
+            style={{ color: '#6b7280', fontSize: '1.2rem', cursor: 'pointer' }}
             onClick={() => setShowMenu(true)}
           ></i>
         </div>
@@ -596,19 +601,19 @@ export default function UpdateSegments({ selectedUser }: { selectedUser: { id: s
           <div style={{ 
             position: 'relative', 
             width: '280px', 
-            background: '#0d1117', 
-            borderLeft: '1px solid #30363d',
+            background: '#f9fafb', 
+            borderLeft: '1px solid #e5e7eb',
             height: '100%',
             display: 'flex',
             flexDirection: 'column',
             boxShadow: '-8px 0 24px rgba(0,0,0,0.5)',
             animation: 'slideInRight 0.2s ease-out'
           }}>
-            <div style={{ padding: '16px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '1rem', fontWeight: 700, color: '#f8fafc' }}>Select Segment Type</span>
               <button 
                 onClick={() => setShowMenu(false)}
-                style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem', padding: '4px' }}
+                style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.2rem', padding: '4px' }}
               >×</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -727,3 +732,4 @@ export default function UpdateSegments({ selectedUser }: { selectedUser: { id: s
     </div>
   );
 }
+

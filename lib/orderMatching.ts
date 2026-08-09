@@ -2,9 +2,9 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { getAdminClient } from './adminClient.ts';
 import { telemetry } from './metrics.ts';
 import { checkAndExecuteAccountLiquidation } from './liquidationEngine.ts';
-import { calculateCarryBrokerage } from './brokerage.ts';
+import { calculateCarryBrokerage } from './trading/BrokerageCalculator';
 import { isContractExpired } from './contractExpiry.ts';
-import { calculateFloatingPnl, calculateExitPrice } from './floatingPnl';
+import { calculateFloatingPnl, calculateExitPrice } from './floatingPnl.ts';
 
 export interface Quote {
   id: string; // e.g. "NSE:INFY"
@@ -394,22 +394,21 @@ export class InMemoryMatchingEngine {
           const bufferFee = 0;
           const executionFillPrice = Math.max(0.01, Math.round(priceWithBuffer * 100) / 100);
 
-          // Trigger Executed Order Write (Business Event)
+          // To prevent bypass of the new position engine, we mark the original PENDING order as FILLED_BY_V2
+          // and create the actual EXECUTED order through place_order_v2 which runs atomic matching.
           const dbStart = performance.now();
-          const { error: updateOrderErr } = await admin
+          const { error: cancelOrderErr } = await admin
             .from('orders')
             .update({
-              status: 'EXECUTED',
-              fill_price: executionFillPrice,
-              buffer_fee: bufferFee,
+              status: 'FILLED_BY_V2',
               updated_at: new Date().toISOString(),
             })
             .eq('id', order.id);
 
           telemetry.recordDbCall('write', performance.now() - dbStart);
 
-          if (updateOrderErr) {
-            console.error(`[Order Matching] Failed to update order ${order.id} to EXECUTED:`, updateOrderErr);
+          if (cancelOrderErr) {
+            console.error(`[Order Matching] Failed to mark order ${order.id} as FILLED_BY_V2:`, cancelOrderErr);
             continue;
           }
 
@@ -417,15 +416,36 @@ export class InMemoryMatchingEngine {
           this.activeOrders.delete(order.id);
 
           const rpcStart = performance.now();
-          const { error: rpcErr } = await admin.rpc('process_executed_position', {
-            p_order_id: order.id,
+          const idempotencyKey = `MATCH_EXEC_${order.id}`;
+          const { data: newOrderId, error: rpcErr } = await admin.rpc('place_order_v2', {
+            p_user_id: order.user_id,
+            p_symbol: order.symbol,
+            p_kite_inst: order.kite_instrument || order.symbol,
+            p_segment: order.segment || 'NSE-EQ',
+            p_side: order.side,
+            p_order_type: order.order_type || 'LIMIT',
+            p_product_type: order.product_type || 'INTRADAY',
+            p_qty: Number(order.qty),
+            p_lots: Number(order.lots || 0),
+            p_ltp: ltp,
+            p_fill_price: executionFillPrice,
+            p_is_exit: !!order.is_exit,
+            p_buffer_fee: bufferFee,
+            p_status: 'EXECUTED',
+            p_trigger_price: order.trigger_price ? Number(order.trigger_price) : null,
+            p_stop_loss: order.stop_loss ? Number(order.stop_loss) : null,
+            p_target: order.target ? Number(order.target) : null,
+            p_info: order.info || null,
+            p_expected_margin: 0, // already validated when the limit order was placed
+            p_expected_brokerage: Number(order.brokerage || 0),
+            p_idempotency_key: idempotencyKey
           });
 
           telemetry.recordDbCall('write', performance.now() - rpcStart);
           telemetry.recordTriggerExecution(performance.now() - rpcStart);
 
           if (rpcErr) {
-            console.error(`[Order Matching] Failed to process executed position for order ${order.id}:`, rpcErr);
+            console.error(`[Order Matching] place_order_v2 failed for order ${order.id}:`, rpcErr);
           }
 
           let finalBrokerage = 0;
@@ -542,10 +562,11 @@ export class InMemoryMatchingEngine {
             // Only warn when the symbol is a live (non-expired) contract.
             // Expired futures simply have no feed — that's expected, not a bug.
             if (!isContractExpired(pos.symbol)) {
-              console.warn(
-                `[OrderMatching] No live LTP for ${pos.symbol} (user ${userId}). ` +
-                `Using fallback ltp=${ltp}. Check ticker subscription.`,
-              );
+              // Removed console.warn to prevent Railway log rate limiting
+              // console.warn(
+              //   `[OrderMatching] No live LTP for ${pos.symbol} (user ${userId}). ` +
+              //     `Using fallback ltp=${ltp}. Check ticker subscription.`
+              // );
             }
           }
 
@@ -680,13 +701,12 @@ export class InMemoryMatchingEngine {
       if (positionsToClose.length > 0) {
         const closeStart = performance.now();
         await Promise.all(positionsToClose.map(async ({ pos, ltp, exitPrice, closeReason, carryBrokerage }) => {
-          const { error: closeRpcErr } = await admin.rpc('close_position', {
-            p_position_id: pos.id,
-            p_user_id: pos.user_id,
-            p_ltp: ltp,
-            p_exit_price: exitPrice,
-            p_closed_by: closeReason,
-            p_brokerage: carryBrokerage,
+          const { error: closeRpcErr } = await admin.rpc('close_position_v2', {
+            p_position_id:        pos.id,
+            p_close_qty:          Number(pos.qty_open),
+            p_close_price:        exitPrice,
+            p_closed_by:          closeReason,
+            p_expected_brokerage: carryBrokerage,
           });
 
           if (closeRpcErr) {

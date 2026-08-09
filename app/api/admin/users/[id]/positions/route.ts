@@ -61,6 +61,8 @@ export async function GET(
     const url = new URL(request.url);
     const tab = url.searchParams.get('tab') ?? null;
     const search = url.searchParams.get('search') ?? null;
+    const startDate = url.searchParams.get('start_date') ?? null;
+    const endDate = url.searchParams.get('end_date') ?? null;
     const rowsParam = url.searchParams.get('rows') ?? null;
     const pageParam = url.searchParams.get('page') ?? null;
     const demoParam = url.searchParams.get('demo');
@@ -97,7 +99,9 @@ export async function GET(
     // Step 5: Apply tab filter
     // Validates: Requirements 7.3, 7.4, 7.5
     if (tab === 'open') {
-      query = query.in('status', ['open', 'active']);
+      query = query.eq('status', 'open');
+    } else if (tab === 'active') {
+      query = query.eq('status', 'active');
     } else if (tab === 'closed') {
       query = query.eq('status', 'closed');
     }
@@ -108,11 +112,13 @@ export async function GET(
       query = query.ilike('symbol', `%${search}%`);
     }
 
-    // Step 7: Apply pagination
-    // Validates: Requirement 7.6
-    const from = page * rows;
-    const to = from + rows - 1;
-    query = query.range(from, to);
+    // Apply date range filters
+    if (startDate) {
+      query = query.gte('entry_time', startDate + 'T00:00:00.000Z');
+    }
+    if (endDate) {
+      query = query.lte('entry_time', endDate + 'T23:59:59.999Z');
+    }
 
     // Apply newest to oldest sorting
     if (tab === 'closed') {
@@ -120,6 +126,12 @@ export async function GET(
     } else {
       query = query.order('entry_time', { ascending: false });
     }
+
+    // Step 7: Apply pagination
+    // Validates: Requirement 7.6
+    const from = page * rows;
+    const to = from + rows - 1;
+    query = query.range(from, to);
 
     const { data, error } = await query;
 

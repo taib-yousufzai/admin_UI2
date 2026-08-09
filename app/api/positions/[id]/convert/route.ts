@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminClient, getUserFromRequest } from '@/lib/adminClient';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 import { getLotSizeFromDB } from '@/lib/lotSize';
 import { calculateFreeMarginFromPositions } from '@/lib/floatingPnl';
+import { RiskValidation } from '@/lib/trading/RiskValidation';
 
 export async function POST(
   request: NextRequest,
@@ -49,6 +50,28 @@ export async function POST(
 
     if (pos.product_type === product_type) {
       return NextResponse.json({ error: `Position is already ${product_type}` }, { status: 400 });
+    }
+
+    // Market closed check for all conversions
+    const settlement = (pos.settlement || '').toUpperCase();
+    let segmentId = 'nse';
+    if (settlement.includes('MCX')) segmentId = 'mcx';
+    else if (settlement.includes('BSE') || settlement.includes('BFO')) segmentId = 'bse';
+    else if (settlement.includes('CDS') || settlement.includes('FOREX')) segmentId = 'forex';
+    else if (settlement.includes('COMEX')) segmentId = 'comex';
+    else if (settlement.includes('CRYPTO')) segmentId = 'crypto';
+
+    if (segmentId !== 'crypto') {
+      const { data: marketHours } = await admin
+        .from('trading_hours')
+        .select('start_time, end_time, is_active')
+        .eq('id', segmentId)
+        .maybeSingle();
+
+      const isMarketOpen = RiskValidation.validateTradingHours(marketHours);
+      if (!isMarketOpen) {
+        return NextResponse.json({ error: `Market is closed. You cannot convert position to ${product_type}.` }, { status: 400 });
+      }
     }
 
     // 2. Calculate the new leverage and required margin
@@ -99,107 +122,71 @@ export async function POST(
     const currentPositionMargin = Number(pos.margin_required || 0);
     const marginDifference = newMarginRequired - currentPositionMargin;
 
-    // 3. If converting requires more margin, perform a free margin check
-    if (marginDifference > 0) {
-      const { data: allOpenPos } = await admin.from('positions')
-        .select('locked_margin, margin_required, pnl')
-        .eq('user_id', user.id)
-        .eq('status', 'open');
+    // 3. Fetch free margin once (needed for both margin diff check and brokerage check)
+    const { data: allOpenPos } = await admin.from('positions')
+      .select('locked_margin, margin_required, pnl')
+      .eq('user_id', user.id)
+      .eq('status', 'open');
 
-      const totalUsedMargin = (allOpenPos || []).reduce((acc, p) => acc + Number(p.locked_margin || p.margin_required || 0), 0);
-      const balance = Number(profile.balance || 0);
-      const freeMargin = calculateFreeMarginFromPositions(balance, allOpenPos || []);
+    const balance = Number(profile.balance || 0);
+    const freeMargin = calculateFreeMarginFromPositions(balance, allOpenPos || []);
 
-      if (freeMargin < marginDifference) {
+    // If converting requires more margin, check availability
+    if (marginDifference > 0 && freeMargin < marginDifference) {
+      return NextResponse.json({
+        error: `Insufficient margin. Available free margin: ₹${freeMargin.toFixed(2)}, Required additional margin: ₹${marginDifference.toFixed(2)}`
+      }, { status: 400 });
+    }
+
+    // 3.5 Calculate carry brokerage if converting to CARRY and not yet paid
+    let carryBrokerageToCharge = 0;
+    if (product_type === 'CARRY' && !pos.carry_brokerage_paid) {
+      const adminClient = getAdminClient();
+      const lotSize = await getLotSizeFromDB(pos.symbol || '', adminClient);
+      const calculatedLots = Number(pos.qty_open) / lotSize;
+
+      carryBrokerageToCharge = calculateCarryBrokerage({
+        productType: 'CARRY',
+        qty: Number(pos.qty_open),
+        entryPrice: Number(pos.entry_price),
+        lots: Number(pos.lots || 0) || calculatedLots || undefined,
+        carryCommissionType: segSetting?.carry_commission_type,
+        commissionType: segSetting?.commission_type,
+        carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
+        commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
+      });
+
+      if (carryBrokerageToCharge > 0 && freeMargin < (marginDifference + carryBrokerageToCharge)) {
         return NextResponse.json({
-          error: `Insufficient margin. Available free margin: ₹${freeMargin.toFixed(2)}, Required additional margin: ₹${marginDifference.toFixed(2)}`
+          error: `Insufficient margin. Free margin: ₹${freeMargin.toFixed(2)}, Required: ₹${(marginDifference + carryBrokerageToCharge).toFixed(2)} (including ₹${carryBrokerageToCharge.toFixed(2)} carry brokerage)`
         }, { status: 400 });
       }
     }
 
-    // 3.5 Deduct Carry Brokerage immediately if converting to CARRY
-    if (product_type === 'CARRY') {
-      const carryBrokerage = calculateCarryBrokerage({
-        productType: 'CARRY',
-        qty: Number(pos.qty_open),
-        entryPrice: Number(pos.entry_price),
-        lots: Number(pos.lots || 0) || undefined,
-        carryCommissionType: segSetting?.carry_commission_type,
-        carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
-        commissionType: segSetting?.commission_type,
-        commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
-      });
+    // Call the atomic database transaction RPC
+    const idempotencyKey = `CONV_BRK_${positionId}`;
+    const { data: success, error: rpcErr } = await admin.rpc('convert_position_v1', {
+      p_position_id: positionId,
+      p_user_id: user.id,
+      p_new_product_type: product_type,
+      p_new_margin: newMarginRequired,
+      p_carry_brokerage: carryBrokerageToCharge,
+      p_idempotency_key: idempotencyKey
+    });
 
-      if (carryBrokerage > 0) {
-        // We will insert a BROKERAGE_DEBIT transaction. The ref_id will uniquely mark it for this position's conversion.
-        const refIdStr = `CARRY_CONV_${positionId}`;
-
-        // Ensure we haven't already charged it
-        const { data: existingTx } = await admin.from('transactions')
-          .select('id')
-          .eq('ref_id', refIdStr)
-          .eq('type', 'BROKERAGE_DEBIT')
-          .limit(1);
-
-        if (!existingTx || existingTx.length === 0) {
-          const { error: txErr } = await admin.from('transactions').insert({
-            user_id: user.id,
-            type: 'BROKERAGE_DEBIT',
-            amount: carryBrokerage,
-            status: 'APPROVED',
-            ref_id: refIdStr,
-          });
-
-          if (txErr) {
-            console.error('[Positions Convert API] Error inserting carry brokerage transaction:', txErr);
-            return NextResponse.json({ error: 'Failed to process carry brokerage deduction.' }, { status: 500 });
-          }
-
-          // Deduct from balance
-          const { error: balErr } = await admin.rpc('decrement_balance', {
-            p_user_id: user.id,
-            p_amount: carryBrokerage
-          });
-          
-          if (balErr) {
-             console.error('[Positions Convert API] Error decrementing balance:', balErr);
-             // fallback to standard update if RPC fails
-             await admin.from('profiles').update({ balance: Number(profile.balance || 0) - carryBrokerage }).eq('id', user.id);
-          }
-        }
-      }
+    if (rpcErr || !success) {
+      console.error('[Positions Convert API] RPC Error:', rpcErr);
+      return NextResponse.json({ error: rpcErr?.message || 'Failed to convert position' }, { status: 500 });
     }
 
-    // 4. Update the position row itself in the positions table
-    const updateData: any = { 
-      product_type,
-      margin_required: newMarginRequired,
-      locked_margin: newMarginRequired
-    };
-    if (product_type === 'CARRY') {
-      updateData.carry_brokerage_paid = true;
-    }
-
-    const { error: posUpdateErr } = await admin.from('positions')
-      .update(updateData)
-      .eq('id', positionId)
-      .eq('user_id', user.id);
-
-    if (posUpdateErr) {
-      console.error('[Positions Convert API] Error updating position:', posUpdateErr);
-      return NextResponse.json({ error: 'Failed to convert position product type' }, { status: 500 });
-    }
-
-    // 3. Update all EXECUTED orders for this user, symbol, and side (as fallback / consistency)
-    const { error: ordErr } = await admin.from('orders')
-      .update({ product_type })
-      .eq('user_id', user.id)
-      .eq('symbol', pos.symbol)
-      .eq('side', pos.side)
-      .eq('status', 'EXECUTED');
-
-    if (ordErr) {
-      console.error('[Positions Convert API] Error updating orders:', ordErr);
+    // Log action asynchronously
+    if (carryBrokerageToCharge > 0) {
+      (async () => admin.from('act_logs').insert({
+        user_id: user.id,
+        action: 'BROKERAGE_DEDUCTION',
+        reason: `Carry Brokerage charged on conversion to CARRY for ${pos.symbol} (Qty: ${pos.qty_open}) | Amount: ₹${carryBrokerageToCharge.toFixed(2)}`,
+        ip_address: request.headers.get('x-forwarded-for') || '127.0.0.1'
+      }))().catch(err => console.error('[Positions Convert API] Failed to log act_log:', err));
     }
 
     return NextResponse.json({ success: true, product_type }, { status: 200 });

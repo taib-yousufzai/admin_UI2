@@ -17,7 +17,7 @@
  */
 
 import { requireAdmin } from '../../../_auth';
-import { calculateCarryBrokerage } from '@/lib/brokerage';
+import { calculateCarryBrokerage } from '@/lib/trading/BrokerageCalculator';
 
 export async function POST(
   request: Request,
@@ -74,23 +74,25 @@ export async function POST(
     //   - Inserting exit order row
     //   - Writing to act_logs
     // Carry brokerage deferred to exit
-    const carryBrokerage = calculateCarryBrokerage({
-      productType: position.product_type,
-      qty: Number(position.qty_open),
-      entryPrice: Number(position.entry_price),
-      carryCommissionType: segSetting?.carry_commission_type,
-      carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
-      commissionType: segSetting?.commission_type,
-      commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
-    });
+    let carryBrokerage = 0;
+    if (!position.carry_brokerage_paid) {
+      carryBrokerage = calculateCarryBrokerage({
+        productType: position.product_type,
+        qty: Number(position.qty_open),
+        entryPrice: Number(position.entry_price),
+        carryCommissionType: segSetting?.carry_commission_type,
+        carryCommissionValue: segSetting?.carry_commission_value != null ? Number(segSetting.carry_commission_value) : null,
+        commissionType: segSetting?.commission_type,
+        commissionValue: segSetting?.commission_value != null ? Number(segSetting.commission_value) : null,
+      });
+    }
 
-    const { data: pnl, error: rpcErr } = await adminClient.rpc('close_position', {
-      p_position_id: id,
-      p_user_id: position.user_id,
-      p_ltp: baseLtp,
-      p_exit_price: exitPrice,
-      p_closed_by: 'ADMIN_ACTION',
-      p_brokerage: carryBrokerage,
+    const { data: pnl, error: rpcErr } = await adminClient.rpc('close_position_v2', {
+      p_position_id:        id,
+      p_close_qty:          Number(position.qty_open),
+      p_close_price:        exitPrice,
+      p_closed_by:          'ADMIN',
+      p_expected_brokerage: carryBrokerage,
     });
 
     if (rpcErr) {

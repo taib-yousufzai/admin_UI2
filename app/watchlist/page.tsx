@@ -1,19 +1,23 @@
 'use client';
 import { useState, useEffect, useRef, Suspense, useMemo } from 'react';
+import { api, ApiError } from '@/lib/api';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Footer from '@/components/Footer';
-import Sidebar from '@/components/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { useMarketQuotes, QuoteData } from '@/hooks/useMarketQuotes';
-import { useComexQuotes, ComexQuoteData } from '@/hooks/useComexQuotes';
+import { useComexQuotes } from '@/hooks/useComexQuotes';
+import { ComexQuoteData } from '@/contexts/ComexDataContext';
 import { useOrderEntry, OrderSide, OrderType, ProductType } from '@/hooks/useOrderEntry';
 import { useActivePositions } from '@/hooks/useActivePositions';
 import { useMobileBack } from '@/hooks/useMobileBack';
 import { useBalance } from '@/hooks/useBalance';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import dynamic from 'next/dynamic';
+import { useTradeConfig } from '@/contexts/TradeConfigContext';
+import { mapSegmentToDbSegment } from '@/lib/trading/SymbolMapping';
 const TradingChart = dynamic(() => import('@/components/TradingChart'), { ssr: false });
-import TradeSheet from '@/components/TradeSheet';
+const TradeSheet = dynamic(() => import('@/components/TradeSheet'), { ssr: false });
 import WatchlistSearch from '@/components/WatchlistSearch';
+import { ErrorModal } from '@/components/ErrorModal';
 import './page.css';
 
 export interface WatchlistItem {
@@ -22,6 +26,7 @@ export interface WatchlistItem {
   kiteSymbol: string;
   binanceSymbol?: string;  // e.g. 'BTCUSDT' — crypto (Binance)
   comexSymbol?: string;  // e.g. 'GC=F'    — COMEX USD price (Yahoo Finance proxy, paired with kiteSymbol for MCX)
+  comexName?: string;
   price: number;
   change: string;
   segment: string;
@@ -32,7 +37,6 @@ export interface WatchlistItem {
   close: number;
   category?: string;
   lotSize?: number;
-  comexName?: string;
 }
 
 declare global {
@@ -84,20 +88,20 @@ const DEFAULT_CRYPTO_ITEMS: WatchlistItem[] = [
 // Update expiry month as contracts roll (format: CDS:XYZINR26MONFUT)
 
 const DEFAULT_FOREX_ITEMS: WatchlistItem[] = [
-  { name: 'USD/INR', symbol: 'USDINR_FUT', kiteSymbol: 'CDS:USDINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'EUR/INR', symbol: 'EURINR_FUT', kiteSymbol: 'CDS:EURINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'GBP/INR', symbol: 'GBPINR_FUT', kiteSymbol: 'CDS:GBPINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
-  { name: 'JPY/INR', symbol: 'JPYINR_FUT', kiteSymbol: 'CDS:JPYINR26JULFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
+  { name: 'USD/INR', symbol: 'CDS:USDINR26AUGFUT', kiteSymbol: 'CDS:USDINR26AUGFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
+  { name: 'EUR/INR', symbol: 'CDS:EURINR26AUGFUT', kiteSymbol: 'CDS:EURINR26AUGFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
+  { name: 'GBP/INR', symbol: 'CDS:GBPINR26AUGFUT', kiteSymbol: 'CDS:GBPINR26AUGFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
+  { name: 'JPY/INR', symbol: 'CDS:JPYINR26AUGFUT', kiteSymbol: 'CDS:JPYINR26AUGFUT', price: 0, change: '0%', segment: 'CDS - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'FOREX' },
 ];
 
 // ── Default COMEX Items (MCX ₹ via Kite + COMEX $ via Yahoo proxy) ──────────────
 // Rows with both kiteSymbol + comexSymbol show a ₹⇄$ toggle pill
 
 const DEFAULT_COMEX_ITEMS: WatchlistItem[] = [
-  { name: 'GOLD', comexName: 'Gold', symbol: 'GOLD_FUT', kiteSymbol: 'MCX:GOLD26AUGFUT', comexSymbol: 'GC=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'SILVER', comexName: 'Silver', symbol: 'SILVER_FUT', kiteSymbol: 'MCX:SILVER26SEPFUT', comexSymbol: 'SI=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Sep 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'CRUDEOIL', comexName: 'Crude Oil', symbol: 'CRUDEOIL_FUT', kiteSymbol: 'MCX:CRUDEOIL26JULFUT', comexSymbol: 'CL=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
-  { name: 'COPPER', comexName: 'Copper', symbol: 'COPPER_FUT', kiteSymbol: 'MCX:COPPER26JULFUT', comexSymbol: 'HG=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Jul 2026', open: 0, high: 0, low: 0, close: 0, category: 'COI' },
+  { name: 'GOLD', symbol: 'MCX:GOLD26AUGFUT', kiteSymbol: 'MCX:GOLD26AUGFUT', comexSymbol: 'GC=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0 },
+  { name: 'SILVER', symbol: 'MCX:SILVER26SEPFUT', kiteSymbol: 'MCX:SILVER26SEPFUT', comexSymbol: 'SI=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Sep 2026', open: 0, high: 0, low: 0, close: 0 },
+  { name: 'CRUDEOIL', symbol: 'MCX:CRUDEOIL26AUGFUT', kiteSymbol: 'MCX:CRUDEOIL26AUGFUT', comexSymbol: 'CL=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0 },
+  { name: 'COPPER', symbol: 'MCX:COPPER26AUGFUT', kiteSymbol: 'MCX:COPPER26AUGFUT', comexSymbol: 'HG=F', price: 0, change: '0%', segment: 'MCX - Futures', contractDate: 'Aug 2026', open: 0, high: 0, low: 0, close: 0 },
 ];
 
 export function getDefaultWatchlistItems(): WatchlistItem[] {
@@ -109,7 +113,7 @@ export function getDefaultWatchlistItems(): WatchlistItem[] {
       price: 22456.80,
       change: '+0.45%',
       segment: 'NSE - Futures',
-      contractDate: '28 Mar 2025',
+      contractDate: '',
       open: 22350,
       high: 22580,
       low: 22320,
@@ -122,7 +126,7 @@ export function getDefaultWatchlistItems(): WatchlistItem[] {
       price: 48210.50,
       change: '-0.21%',
       segment: 'NSE - Futures',
-      contractDate: '28 Mar 2025',
+      contractDate: '',
       open: 48350,
       high: 48500,
       low: 48100,
@@ -135,7 +139,7 @@ export function getDefaultWatchlistItems(): WatchlistItem[] {
       price: 74230.15,
       change: '+0.32%',
       segment: 'BSE - Futures',
-      contractDate: '28 Mar 2025',
+      contractDate: '',
       open: 73950,
       high: 74500,
       low: 73800,
@@ -224,7 +228,21 @@ export function getTabForItem(item: WatchlistItem): TabLabel {
   if (item.segment && SEGMENT_TAB_MAP[item.segment]) {
     return SEGMENT_TAB_MAP[item.segment];
   }
-  return 'INDEX-FUT'; // Fallback
+
+  // Robust fallback for unmapped instruments
+  const n = (item.name || item.symbol || '').toUpperCase();
+  if (n.includes('NATURALGAS') || n.includes('CRUDEOIL') || n.includes('GOLD') || n.includes('SILVER') || n.includes('COPPER') || n.includes('ZINC') || n.includes('MCX') || n.includes('ALUMINIUM') || n.includes('LEAD')) {
+    if (n.includes('CE') || n.includes('PE') || n.includes('OPT')) return 'MCX-OPT';
+    return 'MCX-FUT';
+  }
+  if (n.includes('BTC') || n.includes('ETH') || n.includes('DOGE') || n.includes('USDT') || n.includes('CRYPTO')) return 'CRYPTO';
+  if (n.includes('USDINR') || n.includes('EURINR') || n.includes('GBPINR') || n.includes('JPYINR') || n.includes('CDS')) return 'FOREX';
+  if (n.includes('RELIANCE') || n.includes('HDFC') || n.includes('TCS') || n.includes('INFY') || n.includes('STK')) {
+    if (n.includes('CE') || n.includes('PE') || n.includes('OPT')) return 'STOCK-OPT';
+    return 'STOCK-FUT';
+  }
+
+  return 'INDEX-FUT'; // Ultimate Fallback
 }
 
 /** Filters items to those belonging to the active tab. */
@@ -254,8 +272,9 @@ export function filterBySearch(items: WatchlistItem[], query: string): Watchlist
 export function getExchangeBadge(segment: string): string {
   if (segment.startsWith('NSE') && segment !== 'NSE - Equity') return 'NFO';
   if (segment.startsWith('BSE') && segment !== 'BSE - Equity') return 'BFO';
-  if (segment.startsWith('MCX')) return 'MCX';
-  if (segment.startsWith('CDS')) return 'CDS';
+  if (segment.startsWith('MCX') || segment.includes('MCX')) return 'MCX';
+  if (segment.startsWith('CDS') || segment.includes('FOREX')) return 'CDS';
+  if (segment.includes('CRYPTO') || segment === 'Crypto') return 'CRYPTO';
   if (segment === 'NSE - Equity') return 'NSE';
   if (segment === 'BSE - Equity') return 'BSE';
   return 'OTH';
@@ -309,8 +328,9 @@ function InstrumentRow({ item, quote, binanceQuote, comexQuote, onTrade, onDetai
   const [priceView, setPriceView] = useState<'kite' | 'comex'>('kite');
 
   const isCrypto = !!item.binanceSymbol;
-  const hasDualView = !!item.kiteSymbol && !!item.comexSymbol;
-  const showComex = hasDualView && priceView === 'comex';
+  const isPureComex = !!item.comexSymbol && !item.kiteSymbol;
+  const hasDualView = false; // Toggles removed completely
+  const showComex = isPureComex;
 
   let ltp = 0;
   let prevClose = 0;
@@ -352,6 +372,15 @@ function InstrumentRow({ item, quote, binanceQuote, comexQuote, onTrade, onDetai
     onDetail({ ...item, preferredView: priceView } as any);
   };
 
+  const formatUIExpiry = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '';
+    const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return dateStr;
+    const [, year, month, day] = match;
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${parseInt(day, 10)} ${monthNames[parseInt(month, 10) - 1]} ${year}`;
+  };
+
   return (
     <div className="instr-row watchlist-card" data-symbol={item.symbol}>
       <div className="wc-swipe-actions">
@@ -362,7 +391,7 @@ function InstrumentRow({ item, quote, binanceQuote, comexQuote, onTrade, onDetai
       <div className="wc-content instr-row__content">
         <div className="instr-row__left" onClick={handleLeftClick} style={{ cursor: 'pointer' }}>
           <div className="instr-row__name-line">
-            <span className="instr-row__name">{showComex ? (comexQuote?.contractSymbol ?? item.comexName ?? item.name) : item.name}</span>
+            <span className="instr-row__name">{item.name}</span>
             <span className="exchange-badge" style={
               isCrypto ? { background: '#F0A500', color: '#fff' } :
                 showComex ? { background: '#4A148C', color: '#fff' } : {}
@@ -370,10 +399,10 @@ function InstrumentRow({ item, quote, binanceQuote, comexQuote, onTrade, onDetai
               {isCrypto ? 'CRYPTO' : showComex ? 'COMEX' : getExchangeBadge(item.segment)}
             </span>
             {!basketMode && onChart && (
-              <button 
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  onChart(item);
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChart({ ...item, preferredView: priceView } as any);
                 }}
                 style={{ background: 'none', border: 'none', color: '#2C8E5A', cursor: 'pointer', padding: '0 4px', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center' }}
                 title="Open Chart"
@@ -383,7 +412,7 @@ function InstrumentRow({ item, quote, binanceQuote, comexQuote, onTrade, onDetai
             )}
           </div>
           {item.contractDate && (
-            <div className="instr-row__date">{item.contractDate}</div>
+            <div className="instr-row__date">{formatUIExpiry(item.contractDate)}</div>
           )}
           {isCrypto && (
             <div className="instr-row__date" style={{ color: '#6B7280', fontSize: '0.7rem' }}>{item.binanceSymbol}</div>
@@ -466,8 +495,7 @@ function WatchlistContent() {
       tradingSegmentsRef.current = (window as any).__initialTradingSegments;
     }
 
-    fetch('/api/market/instruments/library')
-      .then(res => res.ok ? res.json() : Promise.reject('fetch failed'))
+    api.get<{ segments: TradingSegment[] }>('/api/market/instruments/library')
       .then(data => {
         if (data.segments) {
           setTradingSegments(data.segments);
@@ -499,60 +527,76 @@ function WatchlistContent() {
   const [isFolderDrawerOpen, setIsFolderDrawerOpen] = useState(false);
   const [expandedSegments, setExpandedSegments] = useState<Record<string, boolean>>({});
   const [allowedSegments, setAllowedSegments] = useState<string[] | null>(null);
-  const [segmentSettings, setSegmentSettings] = useState<any[]>([]);
-  const [scriptSettings, setScriptSettings] = useState<{ symbol: string; lot_size: number }[]>([]);
+  // segmentSettings, getSegment, and getLotSize come from the shared TradeConfigProvider
+  const { segmentSettings, getSegment, getLotSize } = useTradeConfig();
   const [blockedSymbols, setBlockedSymbols] = useState<Set<string>>(new Set());
   const [userId, setUserId] = useState<string>('');
   const [tradingHours, setTradingHours] = useState<any[]>([]);
+  const [errorModalMsg, setErrorModalMsg] = useState<string | null>(null);
+
+  // Receive order errors fired by TradeSheet after the sheet has already closed
+  useEffect(() => {
+    const handler = (e: Event) => setErrorModalMsg((e as CustomEvent).detail || 'Order failed.');
+    window.addEventListener('order_error', handler);
+    return () => window.removeEventListener('order_error', handler);
+  }, []);
 
   const isMarketOpen = (item: WatchlistItem) => {
     const segUpper = (item.segment || '').toUpperCase();
     if (segUpper.includes('CRYPTO')) return true;
-    
+
     let segmentId = 'nse';
     if (segUpper.includes('MCX') || segUpper.includes('COMEX')) segmentId = 'mcx';
     else if (segUpper.includes('BSE') || segUpper.includes('BFO')) segmentId = 'bse';
     else if (segUpper.includes('CDS') || segUpper.includes('FOREX')) segmentId = 'forex';
-    
+
     const th = tradingHours.find(t => t.id === segmentId);
     if (!th) return true; // fallback
     if (!th.is_active) return false;
-    
-    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-    const dayOfWeek = nowIST.getDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) return false;
-    
-    const currentHHMM = `${String(nowIST.getHours()).padStart(2, '0')}:${String(nowIST.getMinutes()).padStart(2, '0')}`;
+
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      hour: 'numeric',
+      minute: 'numeric',
+      weekday: 'short',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(new Date());
+    const weekday = parts.find(p => p.type === 'weekday')?.value;
+    const hourVal = parts.find(p => p.type === 'hour')?.value;
+    const minuteVal = parts.find(p => p.type === 'minute')?.value;
+    if (!weekday || !hourVal || !minuteVal) return true;
+
+    if (weekday === 'Sat' || weekday === 'Sun') return false;
+
+    const currentHHMM = `${hourVal.padStart(2, '0')}:${minuteVal.padStart(2, '0')}`;
     if (currentHHMM < th.start_time || currentHHMM >= th.end_time) return false;
-    
+
     return true;
   };
+
+  const isSpotIndex = (item: WatchlistItem) => {
+    if (!item) return false;
+    const spotKiteSymbols = [
+      'NSE:NIFTY 50', 'NSE:NIFTY BANK', 'BSE:SENSEX', 'BSE:BANKEX',
+      'NSE:NIFTY FIN SERVICE', 'NSE:NIFTY MID SELECT', 'NSE:INDIA VIX'
+    ];
+    if (item.kiteSymbol && spotKiteSymbols.includes(item.kiteSymbol.toUpperCase())) return true;
+
+    const nameUpper = (item.name || '').toUpperCase();
+    if (nameUpper.includes('INDEX') && !nameUpper.includes('FUT') && !nameUpper.includes('CE') && !nameUpper.includes('PE')) return true;
+
+    return false;
+  };
+
   const [isExecutingBasket, setIsExecutingBasket] = useState(false);
 
   const getWatchlistLotSize = (item: any): number => {
-    if (item && item.lotSize && item.lotSize > 0) return item.lotSize;
-    const n = (item.name || '').toUpperCase();
-    const s = (item.symbol || '').toUpperCase();
-    const sortedSettings = [...scriptSettings].sort((a, b) => b.symbol.length - a.symbol.length);
-    const dbMatch = sortedSettings.find(set => 
-      n.includes(set.symbol.toUpperCase()) || 
-      s.includes(set.symbol.toUpperCase())
-    );
-    if (dbMatch) return Number(dbMatch.lot_size);
-    if (n.includes('BANKNIFTY') || n.includes('BANKEX')) return 15;
-    if (n.includes('FINNIFTY')) return 25;
-    if (n.includes('MIDCP') || n.includes('MIDCAP')) return 50;
-    if (n.includes('SENSEX')) return 10;
-    if (n.includes('NIFTY')) return 25;
-    if (n.includes('GOLDM')) return 10;
-    if (n.includes('GOLD')) return 100;
-    if (n.includes('SILVERM')) return 5;
-    if (n.includes('SILVER')) return 30;
-    if (n.includes('CRUDEOILM')) return 10;
-    if (n.includes('CRUDEOIL')) return 100;
-    if (n.includes('NATGASMINI')) return 250;
-    if (n.includes('NATURALGAS')) return 1250;
-    return 1;
+    const rawLotSize = Number(item?.lotSize || 0);
+    const isOption = item?.symbol ? (item.symbol.endsWith('CE') || item.symbol.endsWith('PE')) : false;
+    if (item && rawLotSize > 0 && !(isOption && rawLotSize === 1)) return rawLotSize;
+    // Use the context-provided getLotSize which handles script settings + hardcoded fallbacks
+    return getLotSize(item?.symbol || item?.name || '');
   };
 
   useEffect(() => {
@@ -561,57 +605,37 @@ function WatchlistContent() {
         const { supabase: sb } = await import('@/lib/supabaseClient');
         const { data: { session } } = await sb.auth.getSession();
         if (!session) { setAllowedSegments([]); return; }
-        
+
         setUserId(session.user.id);
 
         // Also save to window for easy inline script access
         (window as any).__accessToken = session.access_token;
-        
-        const controller1 = new AbortController();
-        const t1 = setTimeout(() => controller1.abort('Timeout'), 5000);
-        const res = await fetch('/api/user/profile', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          signal: controller1.signal
-        });
-        clearTimeout(t1);
 
-        if (res.ok) {
-          const profile = await res.json();
+        const controller1 = new AbortController();
+        const t1 = setTimeout(() => controller1.abort(), 5000);
+        let profile: any;
+        try {
+          profile = await api.get<any>('/api/user/profile', { signal: controller1.signal });
+        } finally {
+          clearTimeout(t1);
+        }
+
+        if (profile) {
           // Use profile.segments if set, otherwise empty array means all allowed
           setAllowedSegments(profile?.segments ?? []);
 
-          // Fetch segment settings and script settings in parallel
-          const mode = profile?.trading_mode || 'normal';
+          // Fetch block-scripts and trading hours in parallel
+          // segmentSettings and scriptSettings are handled by TradeConfigProvider
           const controller2 = new AbortController();
-          const t2 = setTimeout(() => controller2.abort('Timeout'), 5000);
-          
-          const [resSettings, resScript, resBlocked] = await Promise.all([
-            fetch(`/api/user/segments?mode=${mode}`, {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-              signal: controller2.signal
-            }),
-            fetch('/api/user/script-settings', {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-              signal: controller2.signal
-            }),
-            fetch(`/api/admin/users/${session.user.id}/block-scripts`, {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-              signal: controller2.signal
-            }),
+          const t2 = setTimeout(() => controller2.abort(), 5000);
+
+          const [blockedData] = await Promise.allSettled([
+            api.get<any>(`/api/admin/users/${session.user.id}/block-scripts`, { signal: controller2.signal }),
           ]);
           clearTimeout(t2);
-          
-          if (resSettings.ok) {
-            const settingsData = await resSettings.json();
-            setSegmentSettings(settingsData || []);
-          }
-          if (resScript.ok) {
-            const scriptData = await resScript.json();
-            setScriptSettings(scriptData || []);
-          }
-          if (resBlocked.ok) {
-            const blockedData = await resBlocked.json();
-            const symbols: string[] = blockedData?.symbols || [];
+
+          if (blockedData.status === 'fulfilled') {
+            const symbols: string[] = (blockedData.value as any)?.symbols || [];
             setBlockedSymbols(new Set(symbols.map((s: string) => s.toUpperCase())));
           }
 
@@ -624,7 +648,7 @@ function WatchlistContent() {
           setAllowedSegments([]);
         }
       } catch (err) {
-        if (err !== 'Timeout' && (err as Error)?.name !== 'AbortError') {
+        if ((err as Error)?.name !== 'AbortError') {
           console.warn('Failed to fetch allowed segments', err);
         }
         // On error, fall back to allowing all
@@ -688,37 +712,40 @@ function WatchlistContent() {
       if (i.kiteSymbol) list.push(i.kiteSymbol);
       if (i.binanceSymbol) list.push(i.binanceSymbol);
     });
+    // Also subscribe to the detail sheet item's symbol if it's not already on the watchlist
+    if (selectedItem?.kiteSymbol && !list.includes(selectedItem.kiteSymbol)) {
+      list.push(selectedItem.kiteSymbol);
+    }
     return list;
-  }, [watchlistItems]);
+  }, [watchlistItems, selectedItem?.kiteSymbol]);
 
   const { quotes: marketQuotes } = useMarketQuotes(marketSymbols);
 
-  const comexSymbols = watchlistItems
-    .map(i => i.comexSymbol)
-    .filter((s): s is string => !!s);
+  const comexSymbols = Array.from(new Set([
+    ...watchlistItems.map(i => i.comexSymbol).filter((s): s is string => !!s),
+    ...(selectedItem?.comexSymbol ? [selectedItem.comexSymbol] : [])
+  ]));
   const { quotes: comexQuotes } = useComexQuotes(comexSymbols, 1000);
 
   // ── Detail sheet: resolve live quote from correct source ─────────────────
   const isCrypto = !!(selectedItem?.binanceSymbol);
-  const isComex = selectedItem && (selectedItem as any).preferredView 
-    ? (selectedItem as any).preferredView === 'comex' 
-    : !!(selectedItem?.comexSymbol);
+  const isComex = !!(selectedItem?.comexSymbol) && (!(selectedItem?.kiteSymbol) || (selectedItem as any).preferredView === 'comex');
 
-  const currentKiteQuote    = selectedItem?.kiteSymbol   ? marketQuotes[selectedItem.kiteSymbol]           : null;
+  const currentKiteQuote = selectedItem?.kiteSymbol ? marketQuotes[selectedItem.kiteSymbol] : null;
   const currentBinanceQuote = selectedItem?.binanceSymbol ? marketQuotes[selectedItem.binanceSymbol] : null;
-  const currentComexQuote   = selectedItem?.comexSymbol   ? comexQuotes[selectedItem.comexSymbol]     : null;
+  const currentComexQuote = selectedItem?.comexSymbol ? comexQuotes[selectedItem.comexSymbol] : null;
 
-  let currentLtp           = 0;
+  let currentLtp = 0;
   let currentChangePercent = 0;
 
   if (isCrypto && currentBinanceQuote) {
-    currentLtp           = currentBinanceQuote.lastPrice;
+    currentLtp = currentBinanceQuote.lastPrice;
     currentChangePercent = currentBinanceQuote.changePercent;
   } else if (isComex && currentComexQuote) {
-    currentLtp           = currentComexQuote.lastPrice;
+    currentLtp = currentComexQuote.lastPrice;
     currentChangePercent = currentComexQuote.changePercent;
   } else if (currentKiteQuote) {
-    currentLtp           = currentKiteQuote.lastPrice;
+    currentLtp = currentKiteQuote.lastPrice;
     currentChangePercent = currentKiteQuote.changePercent;
   } else {
     currentLtp = typeof selectedItem?.price === 'string'
@@ -732,8 +759,8 @@ function WatchlistContent() {
   };
 
   const dbSeg = selectedItem ? mapSegmentToDbSegment(selectedItem.segment) : '';
-  const buySetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'BUY');
-  const sellSetting = segmentSettings.find(s => s.segment === dbSeg && s.side === 'SELL');
+  const buySetting = dbSeg ? getSegment(dbSeg, 'BUY') : undefined;
+  const sellSetting = dbSeg ? getSegment(dbSeg, 'SELL') : undefined;
 
   const buyEntryBuffer = buySetting ? buySetting.entry_buffer : 0.003;
   const sellEntryBuffer = sellSetting ? sellSetting.entry_buffer : 0.003;
@@ -750,6 +777,18 @@ function WatchlistContent() {
   } else if (currentKiteQuote) {
     rawBid = currentKiteQuote.bid || currentLtp;
     rawAsk = currentKiteQuote.ask || currentLtp;
+  }
+
+  // Use real bid/ask from the exchange if valid (non-zero and bid < ask).
+  // Only fall back to a tight synthetic spread when prices are missing or crossed.
+  if (currentLtp > 0) {
+    const defaultBid = currentLtp * 0.9995;
+    const defaultAsk = currentLtp * 1.0005;
+    const hasValidSpread = rawBid > 0 && rawAsk > 0 && rawBid < rawAsk;
+    if (!hasValidSpread) {
+      rawBid = defaultBid;
+      rawAsk = defaultAsk;
+    }
   }
 
 
@@ -789,7 +828,7 @@ function WatchlistContent() {
         setIsTradeSheetOpen(false);
         setChartItem(null);
         setIsFolderDrawerOpen(false);
-        
+
         const ids = ['tradeSheet', 'detailSheet', 'chartSheet', 'scriptsFolderDrawer', 'tradeSheetOverlay', 'detailSheetOverlay', 'chartSheetOverlay', 'drawerOverlay'];
         ids.forEach(id => {
           const el = document.getElementById(id);
@@ -807,7 +846,7 @@ function WatchlistContent() {
 
     const observer = new MutationObserver(() => {
       if (isPopping) return;
-      
+
       const isAnyModalOpen = ids.some(id => {
         const el = document.getElementById(id);
         return el && el.classList.contains('open');
@@ -855,22 +894,8 @@ function WatchlistContent() {
     }
   }, [basketMode]);
 
-  // Map a segment label to DB key segment
-  function mapSegmentToDbSegment(s: string): string {
-    if (!s) return '';
-    const trimmed = s.trim();
-    if (['NSE - Futures', 'BSE - Futures', 'NFO - Futures', 'BFO - Futures'].includes(trimmed)) return 'INDEX-FUT';
-    if (['NSE - Options', 'BSE - Options', 'NFO - Options', 'BFO - Options'].includes(trimmed)) return 'INDEX-OPT';
-    if (['NSE - Stock Futures', 'BSE - Stock Futures', 'NFO - Stock Futures', 'BFO - Stock Futures'].includes(trimmed)) return 'STOCK-FUT';
-    if (['NSE - Stock Options', 'BSE - Stock Options', 'NFO - Stock Options', 'BFO - Stock Options'].includes(trimmed)) return 'STOCK-OPT';
-    if (trimmed === 'MCX - Futures') return 'MCX-FUT';
-    if (trimmed === 'MCX - Options') return 'MCX-OPT';
-    if (['NSE - Equity', 'BSE - Equity'].includes(trimmed)) return 'NSE-EQ';
-    if (trimmed === 'Crypto' || trimmed === 'CRYPTO') return 'CRYPTO';
-    if (trimmed === 'Forex' || trimmed === 'FOREX' || trimmed === 'CDS - Futures' || trimmed === 'CDS - Options') return 'FOREX';
-    if (trimmed === 'COMEX - Futures' || trimmed === 'COMEX - Options' || trimmed === 'COMEX' || trimmed === 'COI') return 'COMEX';
-    return trimmed;
-  };
+  // Map a segment label to DB key segment — imported from lib/trading/SymbolMapping
+  // (local copy removed)
 
   const filteredItems = filterBySearch(filterByTab(watchlistItems, activeTab), searchText);
   const scriptMountedRef = useRef(false);
@@ -945,13 +970,29 @@ function WatchlistContent() {
 
   // Handle deep linking from other screens (e.g. Home)
   const deepLinkSymbol = searchParams.get('symbol');
+  const deepLinkAction = searchParams.get('action');
+
+  useEffect(() => {
+    deepLinkHandledRef.current = false;
+  }, [deepLinkSymbol, deepLinkAction]);
+
   useEffect(() => {
     if (!deepLinkSymbol || !hasLoaded) return;
     // Only process the deep-link once — re-running on every watchlistItems change
     // would re-open the deep-linked chart whenever a new item is added from the library.
     if (deepLinkHandledRef.current) return;
     deepLinkHandledRef.current = true;
-    const query = deepLinkSymbol.toUpperCase();
+    // Map dashboard display names back to their standard search terms
+    const aliasMap: Record<string, string> = {
+      'NAT GAS': 'NATURALGAS',
+      'CRUDE OIL': 'CRUDEOIL',
+      'BANK NIFTY': 'BANKNIFTY',
+    };
+    
+    let query = deepLinkSymbol.toUpperCase();
+    if (aliasMap[query]) {
+      query = aliasMap[query];
+    }
 
     const tryOpen = (items: WatchlistItem[]) => {
       let item = items.find(i =>
@@ -962,12 +1003,22 @@ function WatchlistContent() {
 
       // Fallback: Try to find in master segments lists first
       if (!item) {
-        let masterFound: any = null;
-        for (const seg of tradingSegmentsRef.current) {
-          if (seg.instruments) {
-            const found = seg.instruments.find(i => 
-              i.symbol.toUpperCase().replace(/\s/g, '') === query.replace(/\s/g, '') || 
-              i.name.toUpperCase().replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') === query.replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') || 
+        // Try searching defaults first (e.g. for crypto/forex/comex)
+        const allDefaults = [...DEFAULT_CRYPTO_ITEMS, ...DEFAULT_FOREX_ITEMS, ...DEFAULT_COMEX_ITEMS];
+        const defaultMatch = allDefaults.find(d =>
+          d.symbol.toUpperCase() === query ||
+          d.name.toUpperCase().replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') === query.replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') ||
+          (d.kiteSymbol && d.kiteSymbol.toUpperCase() === query)
+        );
+
+        let masterFound: any = defaultMatch ? { ...defaultMatch } : null;
+
+        if (!masterFound) {
+          for (const seg of tradingSegmentsRef.current) {
+            if (seg.instruments) {
+              const found = seg.instruments.find(i =>
+              i.symbol.toUpperCase().replace(/\s/g, '') === query.replace(/\s/g, '') ||
+              i.name.toUpperCase().replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') === query.replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') ||
               (i.kiteSymbol && i.kiteSymbol.toUpperCase() === query) ||
               (i.kiteSymbol && i.kiteSymbol.toUpperCase().split(':').pop() === query)
             );
@@ -975,9 +1026,9 @@ function WatchlistContent() {
           }
           if (seg.subCategories) {
             for (const sub of seg.subCategories) {
-              const found = sub.instruments.find(i => 
-                i.symbol.toUpperCase().replace(/\s/g, '') === query.replace(/\s/g, '') || 
-                i.name.toUpperCase().replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') === query.replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') || 
+              const found = sub.instruments.find(i =>
+                i.symbol.toUpperCase().replace(/\s/g, '') === query.replace(/\s/g, '') ||
+                i.name.toUpperCase().replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') === query.replace(/\s/g, '').replace('INDEX', '').replace('FUT', '') ||
                 (i.kiteSymbol && i.kiteSymbol.toUpperCase() === query) ||
                 (i.kiteSymbol && i.kiteSymbol.toUpperCase().split(':').pop() === query)
               );
@@ -986,8 +1037,9 @@ function WatchlistContent() {
             if (masterFound) break;
           }
         }
+      }
 
-        if (masterFound) {
+      if (masterFound) {
           item = { ...masterFound };
         } else {
           item = {
@@ -1017,7 +1069,7 @@ function WatchlistContent() {
 
       const timer = setTimeout(() => {
         const dashboardBenchmarks = ['NIFTY 50', 'SENSEX', 'BANK NIFTY', 'USD/INR', 'CRUDE OIL', 'GOLD', 'SILVER', 'NAT GAS'];
-        if (dashboardBenchmarks.includes(deepLinkSymbol)) {
+        if (dashboardBenchmarks.includes(deepLinkSymbol) && deepLinkAction !== 'detail') {
           setChartItem(item!);
           setIsBenchmarkChart(true);
           const chartSheet = document.getElementById('chartSheet');
@@ -1032,7 +1084,7 @@ function WatchlistContent() {
     };
 
     return tryOpen(watchlistItemsRef.current);
-  }, [deepLinkSymbol, hasLoaded]);
+  }, [deepLinkSymbol, deepLinkAction, hasLoaded]);
 
   useEffect(() => {
     if (allowedSegments === null) return; // Wait until session/allowedSegments are resolved to avoid premature loading/defaulting
@@ -1055,7 +1107,7 @@ function WatchlistContent() {
       } catch (e) {
         console.warn("localStorage.getItem legacy failed", e);
       }
-      
+
       if (rawLegacy !== null && rawLegacy !== "null") {
         try {
           itemsToLoad = JSON.parse(rawLegacy) as WatchlistItem[];
@@ -1112,6 +1164,18 @@ function WatchlistContent() {
           return { ...match };
         }
       }
+      // Backfill missing comexSymbol on known MCX commodity items
+      if (!item.comexSymbol && item.kiteSymbol?.startsWith('MCX:')) {
+        const COMEX_MAP: Record<string, string> = {
+          GOLD: 'GC=F', SILVER: 'SI=F', CRUDEOIL: 'CL=F', COPPER: 'HG=F', NATURALGAS: 'NG=F'
+        };
+        const baseName = (item.name || '').toUpperCase().replace(/\s*\(COMEX\)/i, '').trim();
+        const cSym = COMEX_MAP[baseName];
+        if (cSym) {
+          migrated = true;
+          return { ...item, comexSymbol: cSym };
+        }
+      }
       // Upgrade expired May 2026 contracts to active June 2026 contracts
       if (item.kiteSymbol && (item.kiteSymbol.includes('26MAYFUT') || item.kiteSymbol.includes('26MAY'))) {
         const allDefaults = [...DEFAULT_FOREX_ITEMS, ...DEFAULT_COMEX_ITEMS, ...getDefaultWatchlistItems()];
@@ -1123,17 +1187,31 @@ function WatchlistContent() {
         const match = DEFAULT_COMEX_ITEMS.find(d => d.symbol === 'SILVER_FUT');
         if (match) { migrated = true; return { ...match }; }
       }
+      // Fix spot index items with erroneous hardcoded contract dates
+      if (item.symbol.endsWith('_INDEX') && item.contractDate) {
+        migrated = true;
+        return { ...item, contractDate: '' };
+      }
       return item;
     });
 
-    if (migrated) {
-      setWatchlistItems(updated);
-      try {
-        localStorage.setItem(userKey, JSON.stringify(updated));
-      } catch (e) {}
-    } else {
-      setWatchlistItems(itemsToLoad);
+    const finalItems = migrated ? updated : itemsToLoad;
+
+    // Deduplicate by symbol — keep the first occurrence.
+    // Guards against duplicates saved in localStorage from prior sessions.
+    const seen = new Set<string>();
+    const deduped = finalItems.filter(item => {
+      if (seen.has(item.symbol)) return false;
+      seen.add(item.symbol);
+      return true;
+    });
+
+    if (deduped.length !== finalItems.length) {
+      // Duplicates were found — persist the cleaned list immediately
+      try { localStorage.setItem(userKey, JSON.stringify(deduped)); } catch (e) {}
     }
+
+    setWatchlistItems(deduped);
     setHasLoaded(true);
   }, [userId, allowedSegments]);
 
@@ -1309,6 +1387,10 @@ function WatchlistContent() {
   }, [watchlistItems, activeTab, userId]);
 
   const openTradeSheet = (item: WatchlistItem, side: 'BUY' | 'SELL' | 'BOTH' = 'BOTH') => {
+    if (isSpotIndex(item)) {
+      showToast('Indices cannot be traded directly. Trade their Futures or Options.', true);
+      return;
+    }
     setTradeSide(side);
     setSelectedItem(item);
     // Reset defaults or set based on item type
@@ -1343,6 +1425,12 @@ function WatchlistContent() {
     window.__kiteQuotes = window.__kiteQuotes || {};
     window.__watchlistItems = window.__watchlistItems || [];
     (window as any).__reactSetSelectionActive = setIsSelectionActive;
+
+    // Expose api helpers for inline script use (avoids raw fetch in the injected script)
+    (window as any).__apiPostKiteQuotes = (instruments: string[]) =>
+      api.post<{ data: Record<string, any> }>('/api/kite/quotes', { instruments });
+    (window as any).__apiSearchInstruments = (path: string, signal: AbortSignal) =>
+      api.get<any[]>(path, { signal });
 
     // Reset any stale search state from previous mount
     if (typeof (window as any).__triggerSearch === 'function') {
@@ -1380,847 +1468,823 @@ function WatchlistContent() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
       <main className="main-viewport">
         <div className="mobile-app" suppressHydrationWarning>
-      <div className="app-header">
-        <div className="header-top">
-          <div className="logo-area">
-            <div className="logo-text">Watchlist</div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-            <div className="folder-btn" id="openFolderMobileBtn" onClick={() => setIsFolderDrawerOpen(true)}>
-              <span>Scripts Library</span>
-              <i className="fas fa-chevron-right"></i>
-            </div>
-          </div>
-        </div>
-        <SegmentTabBar activeTab={activeTab} onTabChange={(tab) => { setActiveTab(tab); setSearchText(''); }} />
-        <WatchlistSearch 
-           activeTab={activeTab} 
-           addedSymbols={new Set(watchlistItems.map(i => i.symbol))}
-           onAdd={(item) => {
-             setWatchlistItems(prev => {
-               const newItem = { ...item, category: activeTab };
-               if (prev.some(i => i.symbol === newItem.symbol && (activeTab === 'All' || getTabForItem(i) === activeTab))) {
-                 return prev;
-               }
-               const next = [...prev, newItem];
-               saveWatchlistToStorage(next, userId);
-               if (typeof (window as any).__syncWatchlistSymbols === 'function') {
-                 (window as any).__syncWatchlistSymbols(next.map((i: WatchlistItem) => i.symbol));
-               }
-               return next;
-             });
-           }}
-           onRemove={(item) => {
-             setWatchlistItems(prev => {
-               const next = prev.filter(i => i.symbol !== item.symbol);
-               saveWatchlistToStorage(next, userId);
-               if (typeof (window as any).__syncWatchlistSymbols === 'function') {
-                 (window as any).__syncWatchlistSymbols(next.map((i: WatchlistItem) => i.symbol));
-               }
-               return next;
-             });
-           }}
-           token={typeof window !== 'undefined' ? (window as any).__accessToken : undefined} 
-        />
-      </div>
-
-      <div className="watchlist-layout">
-        <div className="main-content">
-
-        <div className="watchlist-section">
-          <div className="watchlist-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '4px', marginTop: '-4px', marginBottom: '8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-              <div className="watchlist-title-section">
-                <div className="watchlist-title">MY WATCHLIST</div>
-                <div className="watchlist-count" id="mobileWatchlistCounter">{filteredItems.length} item{filteredItems.length !== 1 ? 's' : ''}</div>
+          <div className="app-header">
+            <div className="header-top">
+              <div className="logo-area">
+                <div className="logo-text">Watchlist</div>
               </div>
-              <div className="action-hint" style={{ padding: 0, background: 'transparent' }}>Swipe | Tap to trade</div>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <div className="folder-btn" id="openFolderMobileBtn" onClick={() => setIsFolderDrawerOpen(true)}>
+                  <span>Scripts Library</span>
+                  <i className="fas fa-chevron-right"></i>
+                </div>
+              </div>
             </div>
-          </div>
-          <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-            <span className="add-hint">Add scripts to watchlist from Scripts Library</span>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <div className="folder-btn basket-btn" id="basketModeBtn"
-                onClick={() => {
-                  if (isSelectionActive) {
-                    if (typeof (window as any).__reactDeleteSelected === 'function') (window as any).__reactDeleteSelected();
-                  } else {
-                    setBasketMode(b => !b);
+            <SegmentTabBar activeTab={activeTab} onTabChange={(tab) => { setActiveTab(tab); setSearchText(''); }} />
+            <WatchlistSearch
+              activeTab={activeTab}
+              addedSymbols={new Set(watchlistItems.map(i => i.symbol))}
+              onAdd={(item) => {
+                setWatchlistItems(prev => {
+                  const newItem = { ...item, category: activeTab };
+                  if (prev.some(i => i.symbol === newItem.symbol && (activeTab === 'All' || getTabForItem(i) === activeTab))) {
+                    return prev;
                   }
-                }}
-                style={{ cursor: 'pointer', background: isSelectionActive ? '#FEF0F0' : '#E9F6EF', color: isSelectionActive ? '#C62E2E' : '#006400', border: isSelectionActive ? '1px solid #FCD4D4' : '1px solid #C3E6D4', padding: '6px 14px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '30px', fontWeight: '700', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                {isSelectionActive ? <span>Delete</span> : <span>Basket</span>}
-              </div>
-              <div className="folder-btn dustbin-btn"
-                onClick={() => {
-                  if (isSelectionActive) {
-                    setIsSelectionActive(false);
-                    if (typeof (window as any).exitSelectionMode === 'function') (window as any).exitSelectionMode();
-                  } else {
-                    setIsSelectionActive(true);
-                    setBasketMode(false);
-                    if (typeof (window as any).enterSelectionMode === 'function') (window as any).enterSelectionMode();
+                  const next = [...prev, newItem];
+                  saveWatchlistToStorage(next, userId);
+                  if (typeof (window as any).__syncWatchlistSymbols === 'function') {
+                    (window as any).__syncWatchlistSymbols(next.map((i: WatchlistItem) => i.symbol));
                   }
-                }}
-                style={{ cursor: 'pointer', background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB', padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '30px', flexShrink: 0 }}>
-                <i className={isSelectionActive ? "fas fa-times" : "fas fa-trash-alt"}></i>
-              </div>
-            </div>
-          </div>
-          <div className="watchlist-card-list" style={{ paddingBottom: basketMode ? '120px' : '0px' }}>
-            {allowedSegments === null ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 20px', gap: '12px', color: 'var(--text-secondary, #6B7280)' }}>
-                <i className="fas fa-circle-notch fa-spin" style={{ fontSize: '1.5rem', color: '#C62E2E', opacity: 0.6 }} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Loading watchlist…</span>
-              </div>
-            ) : filteredItems.length === 0 ? <EmptyState /> : filteredItems.map((item, index) => (
-              <InstrumentRow
-                key={`${item.symbol}_${index}`}
-                item={item}
-                quote={marketQuotes[item.kiteSymbol]}
-                binanceQuote={item.binanceSymbol ? marketQuotes[item.binanceSymbol] : undefined}
-                comexQuote={item.comexSymbol ? comexQuotes[item.comexSymbol] : undefined}
-                onTrade={(it, type) => {
-                  if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
-                  openTradeSheet(it, type);
-                }}
-                onDetail={openDetailSheet}
-                basketMode={basketMode}
-                onBasketBuy={(it) => {
-                  if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
-                  setBasketLegs(prev => {
-                    // If BUY leg already exists for this symbol, remove it (toggle off)
-                    const exists = prev.find(l => l.item.symbol === it.symbol && l.side === 'BUY');
-                    if (exists) {
-                      showToast(`${it.name} BUY removed`, false);
-                      return prev.filter(l => !(l.item.symbol === it.symbol && l.side === 'BUY'));
-                    }
-                    showToast(`${it.name} BUY added to basket ✓`, false);
-                    return [...prev, { item: it, side: 'BUY', qty: 1, unit: 'qty', productType: 'INTRADAY' }];
-                  });
-                }}
-                onBasketSell={(it) => {
-                  if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
-                  setBasketLegs(prev => {
-                    // If SELL leg already exists for this symbol, remove it (toggle off)
-                    const exists = prev.find(l => l.item.symbol === it.symbol && l.side === 'SELL');
-                    if (exists) {
-                      showToast(`${it.name} SELL removed`, false);
-                      return prev.filter(l => !(l.item.symbol === it.symbol && l.side === 'SELL'));
-                    }
-                    showToast(`${it.name} SELL added to basket ✓`, false);
-                    return [...prev, { item: it, side: 'SELL', qty: 1, unit: 'qty', productType: 'INTRADAY' }];
-                  });
-                }}
-                onChart={(item) => {
-                  setChartItem(item);
-                  setIsBenchmarkChart(false);
-                  const detailSheet = document.getElementById('detailSheet');
-                  const detailOverlay = document.getElementById('detailSheetOverlay');
-                  if (detailSheet) detailSheet.classList.remove('open');
-                  if (detailOverlay) detailOverlay.classList.remove('active');
-                  const chartSheet = document.getElementById('chartSheet');
-                  const chartOverlay = document.getElementById('chartSheetOverlay');
-                  if (chartSheet) chartSheet.classList.add('open');
-                  if (chartOverlay) chartOverlay.classList.add('active');
-                }}
-              />
-            ))}
-            <div id="watchlistMobileContainer"></div>
-          </div>
-        </div>
-      </div>
-
-      {/* Basket bottom bar */}
-      {basketMode && (
-        <div style={{
-          position: 'fixed', bottom: '92px', left: '50%', transform: 'translateX(-50%)',
-          width: 'calc(100% - 24px)', maxWidth: '476px',
-          background: 'var(--container-bg, #FFFFFF)',
-          borderTop: '1px solid var(--border-light, #E8ECF0)', padding: '10px 16px',
-          boxShadow: '0 -4px 16px rgba(0,0,0,0.15)', zIndex: 44,
-          boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px',
-          borderRadius: '16px'
-        }}>
-          <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-primary, #1A1E2B)' }}>
-            {basketLegs.length} in basket
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={() => { setBasketMode(false); setBasketLegs([]); }}
-              style={{ flex: 1, background: 'var(--icon-bg, #F3F4F6)', color: 'var(--text-secondary, #4B5563)', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            >
-              <i className="fas fa-times"></i> Cancel
-            </button>
-            <button
-              onClick={() => {
-                const sheet = document.getElementById('basketSheet');
-                const overlay = document.getElementById('basketSheetOverlay');
-                if (sheet) sheet.classList.add('open');
-                if (overlay) overlay.classList.add('active');
-              }}
-              style={{ flex: 2, background: '#15803D', color: '#fff', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-            >
-              <i className="fas fa-shopping-basket"></i> View Basket
-            </button>
-          </div>
-        </div>
-      )}
-
-      {isTradeSheetOpen && selectedItem && (
-        <TradeSheet
-          item={selectedItem as any}
-          side={tradeSide === 'BOTH' ? 'BUY' : tradeSide}
-          onClose={closeTradeSheet}
-        />
-      )}
-
-      <div id="detailSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('detailSheet'); const overlay = document.getElementById('detailSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}></div>
-      <div id="detailSheet" className="trade-sheet detail-sheet" style={{ height: 'auto', maxHeight: '72dvh', paddingBottom: '16px' }}>
-        <div className="sheet-handle"><div className="handle-bar"></div></div>
-        {selectedItem && (() => {
-          const ltp = currentLtp;
-          const bid = rawBid;
-          const ask = rawAsk;
-          const chgPct = currentChangePercent;
-          const fmt = (v: number) => formatPrice(v);
-          return (
-            <div style={{ padding: '0' }}>
-              <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
-                  <button style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--icon-bg)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: '0', flexShrink: 0 }} onClick={() => { const sheet = document.getElementById('detailSheet'); const overlay = document.getElementById('detailSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}>
-                    <i className="fas fa-chevron-left" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}></i>
-                  </button>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--text-primary)', lineHeight: '1.15' }}>{selectedItem.name}</div>
-                    <div>
-                      <span style={{ fontSize: '0.51rem', fontWeight: '700', color: '#DC2626', background: '#FEF2F2', padding: '2px 6px', borderRadius: '20px', lineHeight: '1', display: 'inline-block' }}>{selectedItem.segment}</span>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', textAlign: 'right' }}>
-                  <span style={{ fontSize: '0.65rem', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '1px', lineHeight: '1' }}>CMP</span>
-                  <div style={{ fontSize: '1.3rem', fontWeight: '800', color: 'var(--text-primary)', lineHeight: '1.1', letterSpacing: '-0.3px' }}>{fmt(ltp)}</div>
-                  <span className="sheet-change" style={{ fontSize: '0.78rem', fontWeight: '700', padding: '0', lineHeight: '1', color: chgPct >= 0 ? '#059669' : '#DC2626' }}>{chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%</span>
-                </div>
-              </div>
-              <div style={{ height: '1px', background: 'var(--border-light)', margin: '0 0 8px', width: '100%' }}></div>
-              <div style={{ padding: '0 12px 10px 12px' }}>
-                {/* Open Trading Chart Button */}
-                <button
-                  style={{
-                    width: '100%',
-                    padding: '9px',
-                    borderRadius: '50px',
-                    border: '1px solid rgba(44, 142, 90, 0.6)',
-                    background: 'transparent',
-                    color: '#2C8E5A',
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: '0.8rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    marginBottom: '8px',
-                    transition: 'all 0.18s'
-                  }}
-                  onClick={() => {
-                    setChartItem(selectedItem);
-                    setIsBenchmarkChart(false);
-                    const detailSheet = document.getElementById('detailSheet');
-                    const detailOverlay = document.getElementById('detailSheetOverlay');
-                    if (detailSheet) detailSheet.classList.remove('open');
-                    if (detailOverlay) detailOverlay.classList.remove('active');
-                    const chartSheet = document.getElementById('chartSheet');
-                    const chartOverlay = document.getElementById('chartSheetOverlay');
-                    if (chartSheet) chartSheet.classList.add('open');
-                    if (chartOverlay) chartOverlay.classList.add('active');
-                  }}
-                >
-                  <svg 
-                    viewBox="0 0 24 24" 
-                    style={{
-                      width: '1.1rem',
-                      height: '1.1rem',
-                      display: 'inline-block',
-                      verticalAlign: 'middle',
-                    }}
-                  >
-                    {/* Bars */}
-                    <rect x="4" y="16" width="2.5" height="4" rx="0.5" fill="currentColor" />
-                    <rect x="9" y="13" width="2.5" height="7" rx="0.5" fill="currentColor" />
-                    <rect x="14" y="14" width="2.5" height="6" rx="0.5" fill="currentColor" />
-                    <rect x="19" y="11" width="2.5" height="9" rx="0.5" fill="currentColor" />
-                    
-                    {/* Trendline */}
-                    <path 
-                      d="M 4 14 L 8 9 L 13 12 L 20 4" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      strokeWidth="2" 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                    />
-                    {/* Arrowhead */}
-                    <polyline 
-                      points="15 4 20 4 20 9" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      strokeWidth="2" 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                    />
-                  </svg>
-                  Open Trading Chart
-                </button>
-
-                  <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 12px', display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.58rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>BID</div>
-                      <div style={{ fontSize: '0.9rem', fontWeight: '700', color: '#059669' }}>{fmt(rawBid)}</div>
-                    </div>
-                    <div style={{ width: '1px', background: 'var(--border-card)', height: '24px' }}></div>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.58rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>ASK</div>
-                      <div style={{ fontSize: '0.9rem', fontWeight: '700', color: '#DC2626' }}>{fmt(rawAsk)}</div>
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <div style={{ fontSize: '0.62rem', fontWeight: '700', color: 'var(--text-secondary)', marginBottom: '6px' }}>PRICE SUMMARY</div>
-                    <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 10px', display: 'flex', justifyContent: 'space-between' }}>
-                      <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>OPEN</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#059669' }}>{fmt((isCrypto && currentBinanceQuote?.open) || (isComex && currentComexQuote?.open) || currentKiteQuote?.open || selectedItem.open)}</div></div>
-                      <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>HIGH</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#059669' }}>{fmt((isCrypto && currentBinanceQuote?.high) || (isComex && currentComexQuote?.high) || currentKiteQuote?.high || selectedItem.high)}</div></div>
-                      <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>LOW</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#DC2626' }}>{fmt((isCrypto && currentBinanceQuote?.low) || (isComex && currentComexQuote?.low) || currentKiteQuote?.low || selectedItem.low)}</div></div>
-                      <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>CLOSE</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text-primary)' }}>{fmt((isCrypto && currentBinanceQuote?.close) || (isComex && currentComexQuote?.close) || currentKiteQuote?.close || selectedItem.close)}</div></div>
-                    </div>
-                  </div>
-                <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <div style={{ fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}><i className="far fa-calendar-alt"></i> CONTRACT DATE</div>
-                  <div style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text-primary)', background: 'var(--bg-card)', padding: '3px 10px', borderRadius: '20px' }}>{selectedItem.contractDate}</div>
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button style={{ flex: 1, background: '#15803D', color: 'white', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', touchAction: 'manipulation' }} onClick={() => openTradeSheet(selectedItem, 'BUY')} onTouchEnd={(e) => { e.preventDefault(); openTradeSheet(selectedItem, 'BUY'); }}>
-                    <i className="fas fa-arrow-up"></i> BUY
-                  </button>
-                  <button style={{ flex: 1, background: '#B91C1C', color: 'white', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', touchAction: 'manipulation' }} onClick={() => openTradeSheet(selectedItem, 'SELL')} onTouchEnd={(e) => { e.preventDefault(); openTradeSheet(selectedItem, 'SELL'); }}>
-                    <i className="fas fa-arrow-down"></i> SELL
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-
-      <div id="basketSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('basketSheet'); const overlay = document.getElementById('basketSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}></div>
-
-      <div id="basketSheet" className="trade-sheet detail-sheet" style={{ height: '100dvh', maxHeight: '100dvh', width: '100vw', top: 0, left: 0, bottom: 0, position: 'fixed', zIndex: 100000, borderRadius: 0, paddingBottom: '30px', background: 'var(--bg-body, #F5F7FB)' }}>
-        <div style={{ padding: '24px 20px 20px 20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', gap: '12px' }}>
-            <button 
-              onClick={() => { const sheet = document.getElementById('basketSheet'); const overlay = document.getElementById('basketSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}
-              style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-primary)', padding: 0 }}
-            >
-              <i className="fas fa-arrow-left"></i>
-            </button>
-            <div className="basket-sheet-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}><i className="fas fa-shopping-basket"></i> Basket Orders</div>
-          </div>
-
-          {/* Basket legs - React rendered */}
-          <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {basketLegs.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: '#9CA3AF', fontSize: '0.8rem' }}>
-                <i className="fas fa-shopping-basket" style={{ fontSize: '2rem', marginBottom: '8px', display: 'block', opacity: 0.3 }}></i>
-                No items. Tap BUY/SELL on any stock.
-              </div>
-            ) : basketLegs.map((leg, i) => {
-              const ltp = getLegPrice(leg.item);
-              const totalVal = ltp * leg.qty;
-              const legSymbol = '₹';
-              return (
-                <div key={i} style={{ background: 'var(--card-alt-bg, #F8FAFF)', border: '1px solid var(--border-card, #EEF2F8)', borderRadius: '16px', padding: '14px' }}>
-                  {/* Header row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                    <span style={{ fontSize: '0.9rem', fontWeight: '800', color: 'var(--text-primary, #1A1E2B)' }}>{leg.item.name}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary, #1A1E2B)' }}>{legSymbol}{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      <button onClick={() => setBasketLegs(prev => prev.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#C62E2E', cursor: 'pointer', fontSize: '0.9rem', padding: '0' }}>
-                        <i className="fas fa-trash-alt"></i>
-                      </button>
-                    </div>
-                  </div>
-                  {/* Order unit row */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                    <span style={{ fontSize: '0.6rem', fontWeight: '700', color: 'var(--text-muted, #8C94A8)', letterSpacing: '0.5px' }}>ORDER UNIT</span>
-                    <div style={{ display: 'flex', background: 'var(--bg-card, #FFFFFF)', border: '1px solid var(--border-card, #E2E6EC)', borderRadius: '20px', overflow: 'hidden' }}>
-                      <button
-                        onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, unit: 'qty' } : l))}
-                        style={{ padding: '4px 12px', fontSize: '0.65rem', fontWeight: '700', border: 'none', cursor: 'pointer', background: leg.unit !== 'lot' ? '#4B5563' : 'transparent', color: '#fff' }}
-                      >QTY</button>
-                      <button
-                        onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, unit: 'lot' } : l))}
-                        style={{ padding: '4px 12px', fontSize: '0.65rem', fontWeight: '700', border: 'none', cursor: 'pointer', background: leg.unit === 'lot' ? '#4B5563' : 'transparent', color: leg.unit === 'lot' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
-                      >LOT</button>
-                    </div>
-                  </div>
-                  {/* B/S toggle + qty stepper */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ display: 'flex', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-card, #E2E6EC)' }}>
-                      <button
-                        onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, side: 'BUY' } : l))}
-                        style={{ padding: '6px 14px', fontSize: '0.72rem', fontWeight: '800', border: 'none', cursor: 'pointer', background: leg.side === 'BUY' ? '#1a8a3a' : 'var(--icon-bg, #F3F4F6)', color: leg.side === 'BUY' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
-                      >B</button>
-                      <button
-                        onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, side: 'SELL' } : l))}
-                        style={{ padding: '6px 14px', fontSize: '0.72rem', fontWeight: '800', border: 'none', cursor: 'pointer', background: leg.side === 'SELL' ? '#b91c1c' : 'var(--icon-bg, #F3F4F6)', color: leg.side === 'SELL' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
-                      >S</button>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--card-alt-bg, #F3F4F6)', border: '1px solid var(--border-card, #E2E6EC)', borderRadius: '20px', padding: '4px 14px' }}>
-                      <button onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, qty: Math.max(1, l.qty - 1) } : l))} style={{ background: 'none', border: 'none', fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text-secondary, #6B7280)', padding: '0' }}>−</button>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '700', minWidth: '20px', textAlign: 'center', color: 'var(--text-primary, #1A1E2B)' }}>{leg.qty}</span>
-                      <button onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, qty: l.qty + 1 } : l))} style={{ background: 'none', border: 'none', fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text-secondary, #6B7280)', padding: '0' }}>+</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-
-          <div style={{ display: 'flex', gap: '12px', width: '100%', padding: '0 4px' }}>
-            <button
-              style={{ flex: 1, background: '#2C8E5A', color: 'white', border: 'none', padding: '17px 8px', borderRadius: '50px', fontSize: '0.78rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', boxShadow: '0 6px 14px rgba(44,142,90,0.3)', minWidth: 0, whiteSpace: 'nowrap' }}
-              onClick={() => {
-                const sheet = document.getElementById('checkoutSheet');
-                const overlay = document.getElementById('checkoutSheetOverlay');
-                if (sheet) sheet.classList.add('open');
-                if (overlay) overlay.classList.add('active');
-              }}
-            >
-              <i className="fas fa-bolt" style={{ lineHeight: 1, fontSize: '0.78rem' }}></i> Checkout
-            </button>
-            <button
-              style={{ flex: 1, background: 'var(--icon-bg, #EFEFEF)', color: 'var(--text-secondary, #6B7280)', border: 'none', padding: '17px 8px', borderRadius: '50px', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '7px', minWidth: 0, whiteSpace: 'nowrap' }}
-              onClick={() => {
-                setBasketLegs([]);
-                const sheet = document.getElementById('basketSheet');
-                const overlay = document.getElementById('basketSheetOverlay');
-                if (sheet) sheet.classList.remove('open');
-                if (overlay) overlay.classList.remove('active');
-              }}
-            >
-              <i className="fas fa-trash-alt" style={{ opacity: 0.5 }}></i> Clear
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Checkout Sheet */}
-      <div id="checkoutSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('checkoutSheet'); const overlay = document.getElementById('checkoutSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}></div>
-      <div id="checkoutSheet" className="trade-sheet detail-sheet" style={{ height: '100dvh', maxHeight: '100dvh', width: '100vw', top: 0, left: 0, bottom: 0, position: 'fixed', zIndex: 100000, borderRadius: 0, paddingBottom: '30px', background: 'var(--bg-body, #F5F7FB)' }}>
-        <div style={{ padding: '24px 20px 20px 20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-            <div className="sri-name" style={{ fontSize: '1.1rem', fontWeight: '800', color: '#1A1E2B', marginBottom: '16px' }}>Checkout Summary</div>
-            <div className="basket-margin-summary" style={{ border: '1px solid var(--border-light, #EEF2F8)', padding: '16px', borderRadius: '16px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left' }}>
-              <div className="margin-row" style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>Total Items</span><span className="basket-val" style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>{basketLegs.length}</span></div>
-              <div className="margin-row" style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>Total Value</span><span className="basket-val" style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{basketLegs.reduce((acc, l) => acc + (getLegPrice(l.item) * l.qty), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
-              <div className="margin-row" style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>Required Margin</span><span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#C62E2E' }}>₹{basketLegs.reduce((acc, leg) => {
-                const price = getLegPrice(leg.item);
-                const seg = mapSegmentToDbSegment(leg.item.segment);
-                const setting = segmentSettings.find(s => s.segment === seg && s.side === leg.side);
-                const isIntra = (leg.productType || 'INTRADAY') === 'INTRADAY';
-                const lev = Number(isIntra ? (setting?.intraday_leverage ?? 10) : (setting?.normal_leverage ?? 10));
-                const levType = (isIntra ? setting?.intraday_type : setting?.normal_type) ?? 'Multiplier';
-                const lotSz = scriptSettings.find(s => s.symbol === leg.item.symbol)?.lot_size ?? 1;
-                const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
-                const exposure = qty * price;
-                let portion = 0;
-                if (levType === '%') portion = exposure * (lev / 100);
-                else if (levType === 'Fixed') portion = (qty / lotSz) * lev;
-                else portion = exposure / lev;
-                return acc + portion;
-              }, 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
-              {(() => {
-                let intradayCharges = 0;
-                let carryCharges = 0;
-                basketLegs.forEach((leg) => {
-                  const price = getLegPrice(leg.item);
-                  const seg = mapSegmentToDbSegment(leg.item.segment);
-                  const setting = segmentSettings.find(s => s.segment === seg && s.side === leg.side);
-                  const lotSz = scriptSettings.find(s => s.symbol === leg.item.symbol)?.lot_size ?? 1;
-                  const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
-                  const exposure = qty * price;
-                  
-                  const isIntra = (leg.productType || 'INTRADAY') === 'INTRADAY';
-                  const commType = (isIntra ? setting?.intraday_commission_type : setting?.commission_type) || setting?.commission_type || 'Per Crore';
-                  let commVal = Number((isIntra ? setting?.intraday_commission_value : setting?.commission_value) ?? setting?.commission_value ?? 0);
-                  
-                  if (!setting) {
-                    const sUpper = (leg.item.segment || '').toUpperCase();
-                    if (sUpper.includes('FOREX')) commVal = 2000;
-                    else if (sUpper.includes('CRYPTO')) commVal = 1000;
-                    else commVal = 4500;
-                  }
-
-                  let charge = 0;
-                  if (commType === 'Per Crore') charge = (exposure * commVal) / 10000000;
-                  else if (commType === 'Per Lot') charge = (qty / lotSz) * commVal;
-                  else if (commType === 'Per Trade' || commType === 'Flat') charge = commVal;
-                  else charge = exposure * 0.001;
-                  
-                  if (isIntra) intradayCharges += charge * 2;
-                  else carryCharges += charge * 2;
+                  return next;
                 });
-                const totalCharges = intradayCharges + carryCharges;
+              }}
+              onRemove={(item) => {
+                setWatchlistItems(prev => {
+                  const next = prev.filter(i => i.symbol !== item.symbol);
+                  saveWatchlistToStorage(next, userId);
+                  if (typeof (window as any).__syncWatchlistSymbols === 'function') {
+                    (window as any).__syncWatchlistSymbols(next.map((i: WatchlistItem) => i.symbol));
+                  }
+                  return next;
+                });
+              }}
+              token={typeof window !== 'undefined' ? (window as any).__accessToken : undefined}
+            />
+          </div>
 
-                return (
-                  <>
-                    <div className="margin-row" style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-light, #EEF2F8)', paddingTop: '10px', marginTop: '2px', cursor: 'pointer' }} onClick={() => setShowChargesBreakdown(!showChargesBreakdown)}>
-                      <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)', display: 'flex', alignItems: 'center' }}>
-                        Charges Breakdown <i className="fas fa-chevron-down" style={{ marginLeft: '6px', fontSize: '0.65rem', transition: 'transform 0.2s', transform: showChargesBreakdown ? 'rotate(180deg)' : 'none' }}></i>
-                      </span>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#C62E2E' }}>₹{totalCharges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+          <div className="watchlist-layout">
+            <div className="main-content">
+
+              <div className="watchlist-section">
+                <div className="watchlist-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '4px', marginTop: '4px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                    <div className="watchlist-title-section">
+                      <div className="watchlist-title">MY WATCHLIST</div>
+                      <div className="watchlist-count" id="mobileWatchlistCounter">{filteredItems.length} item{filteredItems.length !== 1 ? 's' : ''}</div>
                     </div>
-                    {showChargesBreakdown && (
-                      <div style={{ marginTop: '8px', padding: '8px 10px', background: 'var(--card-alt-bg, #F8FAFF)', borderRadius: '6px', border: '1px solid var(--border-light, #EEF2F8)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>Intraday Brokerage</span>
-                          <span style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{intradayCharges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>Carry Brokerage</span>
-                          <span style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{carryCharges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>GTT Charges</span>
-                          <span style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹0.00</span>
-                        </div>
+                    <div className="action-hint" style={{ padding: 0, background: 'transparent' }}>Swipe | Tap to trade</div>
+                  </div>
+                </div>
+                <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span className="add-hint">Add scripts to watchlist from Scripts Library</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {isSelectionActive && (
+                      <div className="folder-btn select-all-btn"
+                        onClick={() => {
+                          if (typeof (window as any).__reactSelectAll === 'function') (window as any).__reactSelectAll();
+                        }}
+                        style={{ cursor: 'pointer', background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB', padding: '6px 14px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '30px', fontWeight: '700', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        <span>All</span>
                       </div>
                     )}
-                  </>
-                );
-              })()}
-              <div className="margin-row" style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px dashed var(--border-light, #EEF2F8)', paddingTop: '10px', marginTop: '2px' }}><span className="basket-val" style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--text-primary)' }}>Available Balance</span><span style={{ fontSize: '0.9rem', fontWeight: '800', color: '#2C8E5A', background: '#E9F6EF', padding: '4px 10px', borderRadius: '8px' }}>{availableBalance !== null ? `₹${availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '₹0.00'}</span></div>
-            </div>
-            
-            <div style={{ fontSize: '0.9rem', fontWeight: '800', color: '#1A1E2B', marginBottom: '10px', textAlign: 'left' }}>Items to Execute</div>
-            <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left' }}>
-              {basketLegs.map((leg, i) => {
-                const ltp = getLegPrice(leg.item);
-                const totalVal = ltp * leg.qty;
-                return (
-                  <div key={`chk_${i}`} style={{ background: 'var(--card-alt-bg, #F8FAFF)', border: '1px solid var(--border-card, #EEF2F8)', borderRadius: '12px', padding: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '800', color: 'var(--text-primary)' }}>{leg.item.name}</span>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    <div className="folder-btn basket-btn" id="basketModeBtn"
+                      onClick={() => {
+                        if (isSelectionActive) {
+                          if (typeof (window as any).__reactDeleteSelected === 'function') (window as any).__reactDeleteSelected();
+                        } else {
+                          setBasketMode(b => !b);
+                        }
+                      }}
+                      style={{ cursor: 'pointer', background: isSelectionActive ? '#FEF0F0' : '#E9F6EF', color: isSelectionActive ? '#C62E2E' : '#006400', border: isSelectionActive ? '1px solid #FCD4D4' : '1px solid #C3E6D4', padding: '6px 14px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '30px', fontWeight: '700', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      {isSelectionActive ? <span>Delete</span> : <span>Basket</span>}
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.65rem', fontWeight: '800', padding: '2px 8px', borderRadius: '4px', background: leg.side === 'BUY' ? '#E9F6EF' : '#FEF0F0', color: leg.side === 'BUY' ? '#15803D' : '#C62E2E' }}>{leg.side}</span>
-                      <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>{leg.qty} {leg.unit.toUpperCase()}</span>
-                      <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted)' }}>@ ₹{ltp.toLocaleString('en-IN')}</span>
-                      
-                      <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px', background: 'var(--bg-body, #F5F7FB)', padding: '2px', borderRadius: '4px' }}>
-                        <div 
-                          onClick={() => setBasketLegs(prev => prev.map((l, idx) => idx === i ? { ...l, productType: 'INTRADAY' } : l))}
-                          style={{ padding: '2px 6px', fontSize: '0.65rem', fontWeight: '700', borderRadius: '3px', cursor: 'pointer', background: (!leg.productType || leg.productType === 'INTRADAY') ? '#FFFFFF' : 'transparent', color: (!leg.productType || leg.productType === 'INTRADAY') ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                        >Intraday</div>
-                        <div 
-                          onClick={() => setBasketLegs(prev => prev.map((l, idx) => idx === i ? { ...l, productType: 'CARRY' } : l))}
-                          style={{ padding: '2px 6px', fontSize: '0.65rem', fontWeight: '700', borderRadius: '3px', cursor: 'pointer', background: leg.productType === 'CARRY' ? '#FFFFFF' : 'transparent', color: leg.productType === 'CARRY' ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                        >Carry</div>
+                    <div className="folder-btn dustbin-btn"
+                      onClick={() => {
+                        if (isSelectionActive) {
+                          setIsSelectionActive(false);
+                          if (typeof (window as any).exitSelectionMode === 'function') (window as any).exitSelectionMode();
+                        } else {
+                          setIsSelectionActive(true);
+                          setBasketMode(false);
+                          if (typeof (window as any).enterSelectionMode === 'function') (window as any).enterSelectionMode();
+                        }
+                      }}
+                      style={{ cursor: 'pointer', background: '#F3F4F6', color: '#4B5563', border: '1px solid #D1D5DB', padding: '6px 12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '30px', flexShrink: 0 }}>
+                      <i className={isSelectionActive ? "fas fa-times" : "fas fa-trash-alt"}></i>
+                    </div>
+                  </div>
+                </div>
+                <div className="watchlist-card-list" style={{ paddingBottom: basketMode ? '120px' : '0px' }}>
+                  {allowedSegments === null ? (
+                    <div style={{ padding: '40px 0' }}>
+                      <AnimatedLoader text="Loading watchlist..." />
+                    </div>
+                  ) : filteredItems.length === 0 ? <EmptyState /> : filteredItems.map((item, index) => (
+                    <InstrumentRow
+                      key={`${item.symbol}_${index}`}
+                      item={item}
+                      quote={marketQuotes[item.kiteSymbol]}
+                      binanceQuote={item.binanceSymbol ? marketQuotes[item.binanceSymbol] : undefined}
+                      comexQuote={item.comexSymbol ? comexQuotes[item.comexSymbol] : undefined}
+                      onTrade={(it: WatchlistItem, type?: 'BUY' | 'SELL' | 'BOTH') => {
+                        if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
+                        openTradeSheet(it, type);
+                      }}
+                      onDetail={openDetailSheet}
+                      basketMode={basketMode}
+                      onBasketBuy={(it) => {
+                        if (isSpotIndex(it)) { showToast('Indices cannot be traded directly.', true); return; }
+                        if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
+                        setBasketLegs(prev => {
+                          // If BUY leg already exists for this symbol, remove it (toggle off)
+                          const exists = prev.find(l => l.item.symbol === it.symbol && l.side === 'BUY');
+                          if (exists) {
+                            showToast(`${it.name} BUY removed`, false);
+                            return prev.filter(l => !(l.item.symbol === it.symbol && l.side === 'BUY'));
+                          }
+                          showToast(`${it.name} BUY added to basket ✓`, false);
+                          return [...prev, { item: it, side: 'BUY', qty: 1, unit: 'qty', productType: 'INTRADAY' }];
+                        });
+                      }}
+                      onBasketSell={(it) => {
+                        if (isSpotIndex(it)) { showToast('Indices cannot be traded directly.', true); return; }
+                        if (!isMarketOpen(it)) { showToast('Market is closed', true); return; }
+                        setBasketLegs(prev => {
+                          // If SELL leg already exists for this symbol, remove it (toggle off)
+                          const exists = prev.find(l => l.item.symbol === it.symbol && l.side === 'SELL');
+                          if (exists) {
+                            showToast(`${it.name} SELL removed`, false);
+                            return prev.filter(l => !(l.item.symbol === it.symbol && l.side === 'SELL'));
+                          }
+                          showToast(`${it.name} SELL added to basket ✓`, false);
+                          return [...prev, { item: it, side: 'SELL', qty: 1, unit: 'qty', productType: 'INTRADAY' }];
+                        });
+                      }}
+                      onChart={(item) => {
+                        setChartItem(item);
+                        setIsBenchmarkChart(false);
+                        const detailSheet = document.getElementById('detailSheet');
+                        const detailOverlay = document.getElementById('detailSheetOverlay');
+                        if (detailSheet) detailSheet.classList.remove('open');
+                        if (detailOverlay) detailOverlay.classList.remove('active');
+                        const chartSheet = document.getElementById('chartSheet');
+                        const chartOverlay = document.getElementById('chartSheetOverlay');
+                        if (chartSheet) chartSheet.classList.add('open');
+                        if (chartOverlay) chartOverlay.classList.add('active');
+                      }}
+                    />
+                  ))}
+                  <div id="watchlistMobileContainer"></div>
+                </div>
+              </div>
+            </div>
+
+            {/* Basket bottom bar */}
+            {basketMode && (
+              <div style={{
+                position: 'fixed', bottom: '92px', left: '50%', transform: 'translateX(-50%)',
+                width: 'calc(100% - 24px)', maxWidth: '476px',
+                background: 'var(--container-bg, #FFFFFF)',
+                borderTop: '1px solid var(--border-light, #E8ECF0)', padding: '10px 16px',
+                boxShadow: '0 -4px 16px rgba(0,0,0,0.15)', zIndex: 44,
+                boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px',
+                borderRadius: '16px'
+              }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--text-primary, #1A1E2B)' }}>
+                  {basketLegs.length} in basket
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={() => { setBasketMode(false); setBasketLegs([]); }}
+                    style={{ flex: 1, background: 'var(--icon-bg, #F3F4F6)', color: 'var(--text-secondary, #4B5563)', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                  >
+                    <i className="fas fa-times"></i> Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const sheet = document.getElementById('basketSheet');
+                      const overlay = document.getElementById('basketSheetOverlay');
+                      if (sheet) sheet.classList.add('open');
+                      if (overlay) overlay.classList.add('active');
+                    }}
+                    style={{ flex: 2, background: '#15803D', color: '#fff', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.85rem', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                  >
+                    <i className="fas fa-shopping-basket"></i> View Basket
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {isTradeSheetOpen && selectedItem && (
+              <TradeSheet
+                item={selectedItem as any}
+                side={tradeSide === 'BOTH' ? 'BUY' : tradeSide}
+                onClose={closeTradeSheet}
+                hideLotText={true}
+              />
+            )}
+
+            <div id="detailSheetOverlay" className={`trade-sheet-overlay${selectedItem ? ' active' : ''}`} onClick={() => { const sheet = document.getElementById('detailSheet'); const overlay = document.getElementById('detailSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); setSelectedItem(null); }}></div>
+            <div id="detailSheet" className={`trade-sheet detail-sheet${selectedItem ? ' open' : ''}`} style={{ height: 'auto', maxHeight: '72dvh', paddingBottom: '16px' }}>
+              <div className="sheet-handle"><div className="handle-bar"></div></div>
+              {selectedItem && (() => {
+                const ltp = currentLtp;
+                const bid = rawBid;
+                const ask = rawAsk;
+                const chgPct = currentChangePercent;
+                const fmt = (v: number) => formatPrice(v);
+                return (
+                  <div style={{ padding: '0' }}>
+                    <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '10px' }}>
+                        <button style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'var(--icon-bg)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: '0', flexShrink: 0 }} onClick={() => { const sheet = document.getElementById('detailSheet'); const overlay = document.getElementById('detailSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}>
+                          <i className="fas fa-chevron-left" style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}></i>
+                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <div style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--text-primary)', lineHeight: '1.15' }}>{selectedItem.name}</div>
+                          <div>
+                            <span style={{ fontSize: '0.51rem', fontWeight: '700', color: '#DC2626', background: '#FEF2F2', padding: '2px 6px', borderRadius: '20px', lineHeight: '1', display: 'inline-block' }}>{selectedItem.segment}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px', textAlign: 'right' }}>
+                        <span style={{ fontSize: '0.65rem', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '1px', lineHeight: '1' }}>CMP</span>
+                        <div style={{ fontSize: '1.3rem', fontWeight: '800', color: 'var(--text-primary)', lineHeight: '1.1', letterSpacing: '-0.3px' }}>{fmt(ltp)}</div>
+                        <span className="sheet-change" style={{ fontSize: '0.78rem', fontWeight: '700', padding: '0', lineHeight: '1', color: chgPct >= 0 ? '#059669' : '#DC2626' }}>{chgPct >= 0 ? '+' : ''}{chgPct.toFixed(2)}%</span>
+                      </div>
+                    </div>
+                    <div style={{ height: '1px', background: 'var(--border-light)', margin: '0 0 8px', width: '100%' }}></div>
+                    <div style={{ padding: '0 12px 10px 12px' }}>
+                      {/* Open Trading Chart Button */}
+                      <button
+                        style={{
+                          width: '100%',
+                          padding: '9px',
+                          borderRadius: '50px',
+                          border: '1px solid rgba(44, 142, 90, 0.6)',
+                          background: 'transparent',
+                          color: '#2C8E5A',
+                          fontFamily: 'Inter, sans-serif',
+                          fontSize: '0.8rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                          marginBottom: '8px',
+                          transition: 'all 0.18s'
+                        }}
+                        onClick={() => {
+                          setChartItem(selectedItem);
+                          setIsBenchmarkChart(false);
+                          const detailSheet = document.getElementById('detailSheet');
+                          const detailOverlay = document.getElementById('detailSheetOverlay');
+                          if (detailSheet) detailSheet.classList.remove('open');
+                          if (detailOverlay) detailOverlay.classList.remove('active');
+                          const chartSheet = document.getElementById('chartSheet');
+                          const chartOverlay = document.getElementById('chartSheetOverlay');
+                          if (chartSheet) chartSheet.classList.add('open');
+                          if (chartOverlay) chartOverlay.classList.add('active');
+                        }}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          style={{
+                            width: '1.1rem',
+                            height: '1.1rem',
+                            display: 'inline-block',
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {/* Bars */}
+                          <rect x="4" y="16" width="2.5" height="4" rx="0.5" fill="currentColor" />
+                          <rect x="9" y="13" width="2.5" height="7" rx="0.5" fill="currentColor" />
+                          <rect x="14" y="14" width="2.5" height="6" rx="0.5" fill="currentColor" />
+                          <rect x="19" y="11" width="2.5" height="9" rx="0.5" fill="currentColor" />
+
+                          {/* Trendline */}
+                          <path
+                            d="M 4 14 L 8 9 L 13 12 L 20 4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          {/* Arrowhead */}
+                          <polyline
+                            points="15 4 20 4 20 9"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                        Open Trading Chart
+                      </button>
+
+                      <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 12px', display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: '0.58rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>BID</div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: '700', color: '#059669' }}>{fmt(rawBid)}</div>
+                        </div>
+                        <div style={{ width: '1px', background: 'var(--border-card)', height: '24px' }}></div>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: '0.58rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>ASK</div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: '700', color: '#DC2626' }}>{fmt(rawAsk)}</div>
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '0.62rem', fontWeight: '700', color: 'var(--text-secondary)', marginBottom: '6px' }}>PRICE SUMMARY</div>
+                        <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 10px', display: 'flex', justifyContent: 'space-between' }}>
+                          <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>OPEN</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#059669' }}>{fmt((isCrypto && currentBinanceQuote?.open) || (isComex && currentComexQuote?.open) || currentKiteQuote?.open || selectedItem.open)}</div></div>
+                          <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>HIGH</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#059669' }}>{fmt((isCrypto && currentBinanceQuote?.high) || (isComex && currentComexQuote?.high) || currentKiteQuote?.high || selectedItem.high)}</div></div>
+                          <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>LOW</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: '#DC2626' }}>{fmt((isCrypto && currentBinanceQuote?.low) || (isComex && currentComexQuote?.low) || currentKiteQuote?.low || selectedItem.low)}</div></div>
+                          <div style={{ textAlign: 'center' }}><div style={{ fontSize: '0.52rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '3px' }}>CLOSE</div><div style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text-primary)' }}>{fmt((isCrypto && currentBinanceQuote?.close) || (isComex && currentComexQuote?.close) || currentKiteQuote?.close || selectedItem.close)}</div></div>
+                        </div>
+                      </div>
+                      <div style={{ background: 'var(--card-alt-bg)', border: '1px solid var(--border-card)', borderRadius: '14px', padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: '600', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}><i className="far fa-calendar-alt"></i> CONTRACT DATE</div>
+                        <div style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text-primary)', background: 'var(--bg-card)', padding: '3px 10px', borderRadius: '20px' }}>{selectedItem.contractDate}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <button style={{ flex: 1, background: '#15803D', color: 'white', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', touchAction: 'manipulation' }} onClick={() => openTradeSheet(selectedItem, 'BUY')} onTouchEnd={(e) => { e.preventDefault(); openTradeSheet(selectedItem, 'BUY'); }}>
+                          <i className="fas fa-arrow-up"></i> BUY
+                        </button>
+                        <button style={{ flex: 1, background: '#B91C1C', color: 'white', border: 'none', padding: '11px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', touchAction: 'manipulation' }} onClick={() => openTradeSheet(selectedItem, 'SELL')} onTouchEnd={(e) => { e.preventDefault(); openTradeSheet(selectedItem, 'SELL'); }}>
+                          <i className="fas fa-arrow-down"></i> SELL
+                        </button>
                       </div>
                     </div>
                   </div>
                 );
-              })}
+              })()}
             </div>
 
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              disabled={isExecutingBasket}
-              onClick={async () => {
-                if (isExecutingBasket) return;
+            <div id="basketSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('basketSheet'); const overlay = document.getElementById('basketSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}></div>
 
-                // 1. Calculate total margin required + total charges
-                let totalRequiredMargin = 0;
-                let intradayCharges = 0;
-                let carryCharges = 0;
-
-                basketLegs.forEach((leg) => {
-                  const price = getLegPrice(leg.item);
-                  const seg = mapSegmentToDbSegment(leg.item.segment);
-                  const setting = segmentSettings.find(s => s.segment === seg && s.side === leg.side);
-                  const lotSz = scriptSettings.find(s => s.symbol === leg.item.symbol)?.lot_size ?? 1;
-                  const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
-                  const exposure = qty * price;
-                  
-                  // Margin
-                  const isIntra = (leg.productType || 'INTRADAY') === 'INTRADAY';
-                  const lev = Number(isIntra ? (setting?.intraday_leverage ?? 10) : (setting?.normal_leverage ?? 10));
-                  const levType = (isIntra ? setting?.intraday_type : setting?.normal_type) ?? 'Multiplier';
-                  let portion = 0;
-                  if (levType === '%') portion = exposure * (lev / 100);
-                  else if (levType === 'Fixed') portion = (qty / lotSz) * lev;
-                  else portion = exposure / lev;
-                  totalRequiredMargin += portion;
-
-                  // Commission
-                  const commType = (isIntra ? setting?.intraday_commission_type : setting?.commission_type) || setting?.commission_type || 'Per Crore';
-                  let commVal = Number((isIntra ? setting?.intraday_commission_value : setting?.commission_value) ?? setting?.commission_value ?? 0);
-                  
-                  if (!setting) {
-                    const sUpper = (leg.item.segment || '').toUpperCase();
-                    if (sUpper.includes('FOREX')) commVal = 2000;
-                    else if (sUpper.includes('CRYPTO')) commVal = 1000;
-                    else commVal = 4500;
-                  }
-
-                  let charge = 0;
-                  if (commType === 'Per Crore') charge = (exposure * commVal) / 10000000;
-                  else if (commType === 'Per Lot') charge = (qty / lotSz) * commVal;
-                  else if (commType === 'Per Trade' || commType === 'Flat') charge = commVal;
-                  else charge = exposure * 0.001;
-                  
-                  if (isIntra) intradayCharges += charge * 2;
-                  else carryCharges += charge * 2;
-                });
-
-                const totalNeeded = totalRequiredMargin + intradayCharges + carryCharges;
-                const avBal = availableBalance ?? 0;
-
-                if (avBal < totalNeeded) {
-                  showToast(`Insufficient funds. Required: ₹${totalNeeded.toLocaleString('en-IN', { minimumFractionDigits: 2 })}, Available: ₹${avBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`, true);
-                  return;
-                }
-
-                setIsExecutingBasket(true);
-                try {
-                  for (const leg of basketLegs) {
-                    const ltp = getLegPrice(leg.item);
-                    const lotSz = scriptSettings.find(s => s.symbol === leg.item.symbol)?.lot_size ?? 1;
-                    const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
-                    await placeOrder({
-                      symbol: leg.item.symbol,
-                      kite_instrument: leg.item.kiteSymbol || leg.item.symbol,
-                      segment: leg.item.segment,
-                      side: leg.side,
-                      qty: qty,
-                      lots: leg.unit === 'lot' ? leg.qty : Math.ceil(leg.qty / lotSz),
-                      order_type: 'MARKET',
-                      product_type: leg.productType || 'INTRADAY',
-                      client_price: ltp
-                    });
-                  }
-                  showToast('Basket executed successfully!', false);
-                  setBasketLegs([]);
-                  setBasketMode(false);
-                  const sheet = document.getElementById('checkoutSheet');
-                  const overlay = document.getElementById('checkoutSheetOverlay');
-                  if (sheet) sheet.classList.remove('open');
-                  if (overlay) overlay.classList.remove('active');
-                  const bsSheet = document.getElementById('basketSheet');
-                  const bsOverlay = document.getElementById('basketSheetOverlay');
-                  if (bsSheet) bsSheet.classList.remove('open');
-                  if (bsOverlay) bsOverlay.classList.remove('active');
-                } finally {
-                  setIsExecutingBasket(false);
-                }
-              }}
-              style={{ flex: 1, background: isExecutingBasket ? '#9CA3AF' : '#2C8E5A', color: '#fff', border: 'none', padding: '13px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '800', cursor: isExecutingBasket ? 'not-allowed' : 'pointer', boxShadow: isExecutingBasket ? 'none' : '0 4px 12px rgba(44,142,90,0.3)' }}
-            >
-              {isExecutingBasket ? (
-                <><i className="fas fa-spinner fa-spin" style={{ marginRight: '6px' }}></i>Executing...</>
-              ) : (
-                <><i className="fas fa-bolt" style={{ marginRight: '6px' }}></i>Confirm</>
-              )}
-            </button>
-            <button
-              onClick={() => {
-                const sheet = document.getElementById('checkoutSheet');
-                const overlay = document.getElementById('checkoutSheetOverlay');
-                if (sheet) sheet.classList.remove('open');
-                if (overlay) overlay.classList.remove('active');
-              }}
-              style={{ flex: 1, background: '#F3F4F6', color: '#4B5563', border: 'none', padding: '13px 0', borderRadius: '30px', fontSize: '0.9rem', fontWeight: '700', cursor: 'pointer' }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div id="drawerOverlay" className={`drawer-overlay${isFolderDrawerOpen ? ' active' : ''}`} onClick={() => setIsFolderDrawerOpen(false)}></div>
-      <div id="scriptsFolderDrawer" className={`folder-drawer${isFolderDrawerOpen ? ' open' : ''}`}>
-        <div className="drawer-header">
-          <h3>Trading Segments</h3>
-          <button className="close-drawer" onClick={() => setIsFolderDrawerOpen(false)} suppressHydrationWarning><i className="fas fa-times"></i></button>
-        </div>
-        <div className="folder-tree-scroll">
-          {(() => {
-            const DRAWER_SEG_TO_DB_KEY: Record<string, string> = {
-              'INDEX-FUT': 'INDEX-FUT',
-              'INDEX-OPT': 'INDEX-OPT',
-              'MCX-FUT':   'MCX-FUT',
-              'MCX-OPT':   'MCX-OPT',
-              'STOCK-FUT': 'STOCK-FUT',
-              'STOCK-OPT': 'STOCK-OPT',
-              'NSE-EQ':    'NSE-EQ',
-              'CRYPTO':    'CRYPTO',
-              'COMEX':     'COMEX',
-              'FOREX':     'FOREX',
-            };
-            // Define the desired display order
-            const SEGMENT_ORDER = ['INDEX-FUT','INDEX-OPT','MCX-FUT','MCX-OPT','STOCK-FUT','STOCK-OPT','NSE-EQ','CRYPTO','COMEX','FOREX'];
-            const sortedSegments = [...tradingSegments].sort((a, b) => {
-              const ai = SEGMENT_ORDER.indexOf(a.name);
-              const bi = SEGMENT_ORDER.indexOf(b.name);
-              if (ai === -1 && bi === -1) return 0;
-              if (ai === -1) return 1;
-              if (bi === -1) return -1;
-              return ai - bi;
-            });
-            const visibleSegments = sortedSegments.filter(seg => {
-              if (allowedSegments === null) return true; // still loading — show all initially
-              if (allowedSegments.length === 0) return true;
-              const dbKey = DRAWER_SEG_TO_DB_KEY[seg.name] ?? seg.name.toUpperCase();
-              return allowedSegments.includes(dbKey);
-            });
-            return visibleSegments.map((seg) => {
-              // Filter out blocked symbols from this segment's instruments
-              const filterBlocked = (instruments: any[]) =>
-                blockedSymbols.size === 0
-                  ? instruments
-                  : instruments.filter(i => !blockedSymbols.has((i.symbol || '').toUpperCase()));
-
-              const filteredSeg = {
-                ...seg,
-                instruments: seg.instruments ? filterBlocked(seg.instruments) : undefined,
-                subCategories: seg.subCategories
-                  ? seg.subCategories.map((sub: any) => ({
-                      ...sub,
-                      instruments: filterBlocked(sub.instruments || []),
-                    })).filter((sub: any) => sub.instruments.length > 0)
-                  : undefined,
-              };
-
-              const count = (filteredSeg.instruments?.length ?? 0) + (filteredSeg.subCategories?.reduce((a: number, s: any) => a + s.instruments.length, 0) ?? 0);
-              if (count === 0) return null; // hide segment if all instruments are blocked
-              const isOpen = !!expandedSegments[seg.name];
-              return (
-                <div key={seg.name} className="tree-item-li">
-                  <div
-                    className="tree-label-row"
-                    onClick={() => setExpandedSegments(prev => ({ ...prev, [seg.name]: !prev[seg.name] }))}
+            <div id="basketSheet" className="trade-sheet detail-sheet" style={{ height: '100dvh', maxHeight: '100dvh', width: '100vw', top: 0, left: 0, bottom: 0, position: 'fixed', zIndex: 100000, borderRadius: 0, paddingBottom: '30px', background: 'var(--bg-body, #F5F7FB)' }}>
+              <div style={{ padding: '24px 20px 20px 20px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px', gap: '12px' }}>
+                  <button
+                    onClick={() => { const sheet = document.getElementById('basketSheet'); const overlay = document.getElementById('basketSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}
+                    style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-primary)', padding: 0 }}
                   >
-                    <i className="fas fa-chevron-right chevron-icon" style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}></i>
-                    <span style={{ flex: 1, fontWeight: 700, fontSize: '0.88rem' }}>{seg.name}</span>
-                    <span className="segment-count">{count}</span>
-                  </div>
-                  {isOpen && (
-                    <div className="children-container" style={{ display: 'block' }}>
-                      {filteredSeg.instruments?.map((inst) => (
-                        <div key={inst.symbol} className="script-item">
-                          <span>{inst.name}</span>
-                          <button className="add-script-btn" onClick={() => {
-                            if (typeof window.__addToWatchlistCallback === 'function') {
-                              window.__addToWatchlistCallback(inst as WatchlistItem);
-                              showToast('Added to watchlist', false);
-                            }
-                          }}>+ Add</button>
-                        </div>
-                      ))}
-                      {filteredSeg.subCategories?.map((sub) => {
-                        const subKey = `${seg.name}__${sub.name}`;
-                        const subOpen = !!expandedSegments[subKey];
-                        return (
-                          <div key={sub.name} className="tree-item-li">
-                            <div
-                              className="tree-label-row"
-                              style={{ paddingTop: '8px', paddingBottom: '8px' }}
-                              onClick={(e) => { e.stopPropagation(); setExpandedSegments(prev => ({ ...prev, [subKey]: !prev[subKey] })); }}
-                            >
-                              <i className="fas fa-chevron-right chevron-icon" style={{ fontSize: '0.55rem', transform: subOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}></i>
-                              <span style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary, #5B677E)' }}>{sub.name}</span>
-                              <span className="segment-count">{sub.instruments.length}</span>
-                            </div>
-                            {subOpen && (
-                              <div className="children-container" style={{ display: 'block' }}>
-                                {sub.instruments.map((inst) => (
-                                  <div key={inst.symbol} className="script-item">
-                                    <span>{inst.name}</span>
-                                    <button className="add-script-btn" onClick={() => {
-                                      if (typeof window.__addToWatchlistCallback === 'function') {
-                                        window.__addToWatchlistCallback(inst as WatchlistItem);
-                                        showToast('Added to watchlist', false);
-                                      }
-                                    }}>+ Add</button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                    <i className="fas fa-arrow-left"></i>
+                  </button>
+                  <div className="basket-sheet-title" style={{ fontSize: '1.2rem', fontWeight: '800', margin: 0 }}><i className="fas fa-shopping-basket"></i> Basket Orders</div>
                 </div>
-              );
-            });
-          })()}
-        </div>
-        <div className="drawer-footer"><i className="fas fa-plus-circle"></i> Tap <span style={{ color: '#C62E2E' }}>+ Add</span> to watchlist | Browse all segments</div>
-      </div>
-      </div>
 
-      {/* React-driven order toast */}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: '90px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          background: toast.isError ? '#C62E2E' : '#1a7a4a',
-          color: '#fff',
-          padding: '8px 16px',
-          borderRadius: '30px',
-          fontSize: '0.72rem',
-          fontWeight: '600',
-          fontFamily: 'Inter, sans-serif',
-          zIndex: 99999,
-          whiteSpace: 'nowrap',
-          maxWidth: '80vw',
-          overflowX: 'hidden',
-          textOverflow: 'ellipsis',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
-          opacity: toast.visible ? 1 : 0,
-          visibility: toast.visible ? 'visible' : 'hidden',
-          transition: 'opacity 0.2s ease, visibility 0.2s ease',
-        }}
-      >
-        {toast.msg}
-      </div>
+                {/* Basket legs - React rendered */}
+                <div style={{ flex: 1, overflowY: 'auto', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {basketLegs.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '24px', color: '#9CA3AF', fontSize: '0.8rem' }}>
+                      <i className="fas fa-shopping-basket" style={{ fontSize: '2rem', marginBottom: '8px', display: 'block', opacity: 0.3 }}></i>
+                      No items. Tap BUY/SELL on any stock.
+                    </div>
+                  ) : basketLegs.map((leg, i) => {
+                    const ltp = getLegPrice(leg.item);
+                    const totalVal = ltp * leg.qty;
+                    const legSymbol = '₹';
+                    return (
+                      <div key={i} style={{ background: 'var(--card-alt-bg, #F8FAFF)', border: '1px solid var(--border-card, #EEF2F8)', borderRadius: '16px', padding: '14px' }}>
+                        {/* Header row */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: '800', color: 'var(--text-primary, #1A1E2B)' }}>{leg.item.name}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary, #1A1E2B)' }}>{legSymbol}{totalVal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            <button onClick={() => setBasketLegs(prev => prev.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#C62E2E', cursor: 'pointer', fontSize: '0.9rem', padding: '0' }}>
+                              <i className="fas fa-trash-alt"></i>
+                            </button>
+                          </div>
+                        </div>
+                        {/* Order unit row */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                          <span style={{ fontSize: '0.6rem', fontWeight: '700', color: 'var(--text-muted, #8C94A8)', letterSpacing: '0.5px' }}>ORDER UNIT</span>
+                          <div style={{ display: 'flex', background: 'var(--bg-card, #FFFFFF)', border: '1px solid var(--border-card, #E2E6EC)', borderRadius: '20px', overflow: 'hidden' }}>
+                            <button
+                              onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, unit: 'qty' } : l))}
+                              style={{ padding: '4px 12px', fontSize: '0.65rem', fontWeight: '700', border: 'none', cursor: 'pointer', background: leg.unit !== 'lot' ? '#4B5563' : 'transparent', color: '#fff' }}
+                            >QTY</button>
+                            <button
+                              onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, unit: 'lot' } : l))}
+                              style={{ padding: '4px 12px', fontSize: '0.65rem', fontWeight: '700', border: 'none', cursor: 'pointer', background: leg.unit === 'lot' ? '#4B5563' : 'transparent', color: leg.unit === 'lot' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
+                            >LOT</button>
+                          </div>
+                        </div>
+                        {/* B/S toggle + qty stepper */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ display: 'flex', borderRadius: '20px', overflow: 'hidden', border: '1px solid var(--border-card, #E2E6EC)' }}>
+                            <button
+                              onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, side: 'BUY' } : l))}
+                              style={{ padding: '6px 14px', fontSize: '0.72rem', fontWeight: '800', border: 'none', cursor: 'pointer', background: leg.side === 'BUY' ? '#1a8a3a' : 'var(--icon-bg, #F3F4F6)', color: leg.side === 'BUY' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
+                            >B</button>
+                            <button
+                              onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, side: 'SELL' } : l))}
+                              style={{ padding: '6px 14px', fontSize: '0.72rem', fontWeight: '800', border: 'none', cursor: 'pointer', background: leg.side === 'SELL' ? '#b91c1c' : 'var(--icon-bg, #F3F4F6)', color: leg.side === 'SELL' ? '#fff' : 'var(--text-secondary, #6B7280)' }}
+                            >S</button>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--card-alt-bg, #F3F4F6)', border: '1px solid var(--border-card, #E2E6EC)', borderRadius: '20px', padding: '4px 14px' }}>
+                            <button onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, qty: Math.max(1, l.qty - 1) } : l))} style={{ background: 'none', border: 'none', fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text-secondary, #6B7280)', padding: '0' }}>−</button>
+                            <span style={{ fontSize: '0.85rem', fontWeight: '700', minWidth: '20px', textAlign: 'center', color: 'var(--text-primary, #1A1E2B)' }}>{leg.qty}</span>
+                            <button onClick={() => setBasketLegs(prev => prev.map((l, j) => j === i ? { ...l, qty: l.qty + 1 } : l))} style={{ background: 'none', border: 'none', fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text-secondary, #6B7280)', padding: '0' }}>+</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
 
-      <div id="chartSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('chartSheet'); const overlay = document.getElementById('chartSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); setChartItem(null); setIsBenchmarkChart(false); }}></div>
-      <div id="chartSheet" className="trade-sheet" style={{ height: '100dvh', paddingBottom: '0', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, position: 'relative', width: '100%', overflow: 'hidden' }}>
-          {chartItem && (
-            <TradingChart
-              key={`${chartItem.binanceSymbol || chartItem.kiteSymbol || chartItem.symbol}-${chartItem.segment}`}
-              symbol={chartItem.binanceSymbol || chartItem.kiteSymbol || chartItem.symbol}
-              segment={chartItem.binanceSymbol || ['BTC', 'ETH', 'DOGE', 'SOL', 'XRP', 'ADA', 'BNB', 'DOT', 'LTC'].includes(chartItem.symbol) ? 'CRYPTO' : chartItem.segment}
-              liveQuote={chartItem.binanceSymbol ? marketQuotes[chartItem.binanceSymbol] : marketQuotes[chartItem.kiteSymbol]}
-            />
-          )}
-        </div>
-      </div>
 
-      <Footer activeTab="watchlist" />
+                <div style={{ display: 'flex', gap: '12px', width: '100%', padding: '0 4px' }}>
+                  <button
+                    style={{ flex: 1, background: '#2C8E5A', color: 'white', border: 'none', padding: '17px 8px', borderRadius: '50px', fontSize: '0.78rem', fontWeight: '800', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '6px', boxShadow: '0 6px 14px rgba(44,142,90,0.3)', minWidth: 0, whiteSpace: 'nowrap' }}
+                    onClick={() => {
+                      const sheet = document.getElementById('checkoutSheet');
+                      const overlay = document.getElementById('checkoutSheetOverlay');
+                      if (sheet) sheet.classList.add('open');
+                      if (overlay) overlay.classList.add('active');
+                    }}
+                  >
+                    <i className="fas fa-bolt" style={{ lineHeight: 1, fontSize: '0.78rem' }}></i> Checkout
+                  </button>
+                  <button
+                    style={{ flex: 1, background: 'var(--icon-bg, #EFEFEF)', color: 'var(--text-secondary, #6B7280)', border: 'none', padding: '17px 8px', borderRadius: '50px', fontSize: '0.78rem', fontWeight: '600', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '7px', minWidth: 0, whiteSpace: 'nowrap' }}
+                    onClick={() => {
+                      setBasketLegs([]);
+                      const sheet = document.getElementById('basketSheet');
+                      const overlay = document.getElementById('basketSheetOverlay');
+                      if (sheet) sheet.classList.remove('open');
+                      if (overlay) overlay.classList.remove('active');
+                    }}
+                  >
+                    <i className="fas fa-trash-alt" style={{ opacity: 0.5 }}></i> Clear
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Checkout Sheet */}
+            <div id="checkoutSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('checkoutSheet'); const overlay = document.getElementById('checkoutSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); }}></div>
+            <div id="checkoutSheet" className="trade-sheet detail-sheet" style={{ height: '100dvh', maxHeight: '100dvh', width: '100vw', top: 0, left: 0, bottom: 0, position: 'fixed', zIndex: 100000, borderRadius: 0, background: 'var(--bg-body, #F5F7FB)', display: 'flex', flexDirection: 'column', padding: 0 }}>
+
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid var(--border-light, #EEF2F8)', background: 'var(--card-bg, #fff)', flexShrink: 0 }}>
+                <button onClick={() => { const s = document.getElementById('checkoutSheet'); const o = document.getElementById('checkoutSheetOverlay'); if (s) s.classList.remove('open'); if (o) o.classList.remove('active'); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px 10px 4px 0', fontSize: '1.05rem' }}>
+                  <i className="fas fa-arrow-left" />
+                </button>
+                <div>
+                  <div style={{ fontSize: '1rem', fontWeight: '800', color: 'var(--text-primary)' }}>Checkout</div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' }}>{basketLegs.length} item{basketLegs.length !== 1 ? 's' : ''} to execute</div>
+                </div>
+              </div>
+
+              {/* Scrollable body */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                {/* Leg cards */}
+                {basketLegs.map((leg, i) => {
+                  const ltp = getLegPrice(leg.item);
+                  const lotSz = getLotSize(leg.item.symbol || leg.item.name || '');
+                  const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
+                  const isBuy = leg.side === 'BUY';
+                  return (
+                    <div key={`chk_${i}`} style={{ background: 'var(--card-bg, #fff)', border: '1px solid var(--border-card, #EEF2F8)', borderRadius: '14px', padding: '14px 16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '0.6rem', fontWeight: '800', padding: '3px 8px', borderRadius: '5px', background: isBuy ? '#E9F6EF' : '#FEF0F0', color: isBuy ? '#15803D' : '#C62E2E', letterSpacing: '0.04em' }}>{leg.side}</span>
+                          <span style={{ fontSize: '0.9rem', fontWeight: '800', color: 'var(--text-primary)' }}>{leg.item.name || leg.item.symbol}</span>
+                        </div>
+                        <span style={{ fontSize: '0.9rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{(ltp * qty).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)' }}>{leg.qty} {leg.unit.toUpperCase()}</span>
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>@ ₹{ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div style={{ display: 'flex', background: 'var(--bg-body, #F5F7FB)', borderRadius: '8px', padding: '2px', gap: '2px', opacity: isExecutingBasket ? 0.5 : 1, pointerEvents: isExecutingBasket ? 'none' : 'auto' }}>
+                          {(['INTRADAY', 'CARRY'] as const).map(pt => {
+                            const active = (leg.productType || 'INTRADAY') === pt;
+                            return (
+                              <div key={pt} onClick={() => !isExecutingBasket && setBasketLegs(prev => prev.map((l, idx) => idx === i ? { ...l, productType: pt } : l))}
+                                style={{ padding: '3px 10px', fontSize: '0.65rem', fontWeight: '700', borderRadius: '6px', cursor: 'pointer', background: active ? 'var(--card-bg, #fff)' : 'transparent', color: active ? 'var(--text-primary)' : 'var(--text-muted)', boxShadow: active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none', transition: 'all 0.15s' }}>
+                                {pt === 'INTRADAY' ? 'Intraday' : 'Carry'}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Summary card */}
+                {(() => {
+                  let totalMargin = 0, intradayCharges = 0, carryCharges = 0;
+                  basketLegs.forEach((leg) => {
+                    const price = getLegPrice(leg.item); const seg = mapSegmentToDbSegment(leg.item.segment); const setting = getSegment(seg, leg.side);
+                    const lotSz = getLotSize(leg.item.symbol || leg.item.name || ''); const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty; const exposure = qty * price;
+                    const isIntra = (leg.productType || 'INTRADAY') === 'INTRADAY';
+                    const lev = Number(isIntra ? (setting?.intraday_leverage ?? 10) : (setting?.normal_leverage ?? 10));
+                    const levType = (isIntra ? setting?.intraday_type : setting?.normal_type) ?? 'Multiplier';
+                    if (levType === '%') totalMargin += exposure * (lev / 100);
+                    else if (levType === 'Fixed') totalMargin += (qty / lotSz) * lev;
+                    else totalMargin += exposure / lev;
+                    const commType = (isIntra ? setting?.intraday_commission_type : setting?.commission_type) || setting?.commission_type || 'Per Crore';
+                    let commVal = Number((isIntra ? setting?.intraday_commission_value : setting?.commission_value) ?? setting?.commission_value ?? 0);
+                    if (!setting) { const sU = (leg.item.segment || '').toUpperCase(); commVal = sU.includes('FOREX') ? 2000 : sU.includes('CRYPTO') ? 1000 : 4500; }
+                    let charge = 0;
+                    if (commType === 'Per Crore') charge = (exposure * commVal) / 10000000;
+                    else if (commType === 'Per Lot') charge = (qty / lotSz) * commVal;
+                    else if (commType === 'Per Trade' || commType === 'Flat') charge = commVal;
+                    else charge = exposure * 0.001;
+                    if (isIntra) intradayCharges += charge * 2; else carryCharges += charge * 2;
+                  });
+                  const totalCharges = intradayCharges + carryCharges;
+                  const totalValue = basketLegs.reduce((acc, l) => { const lz = getLotSize(l.item.symbol || l.item.name || ''); const q = l.unit === 'lot' ? l.qty * lz : l.qty; return acc + getLegPrice(l.item) * q; }, 0);
+                  const row: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '11px 0', borderBottom: '1px solid var(--border-light, #EEF2F8)' };
+                  const lbl: React.CSSProperties = { fontSize: '0.78rem', fontWeight: '600', color: 'var(--text-muted, #8C94A8)' };
+                  const val: React.CSSProperties = { fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' };
+                  return (
+                    <div style={{ background: 'var(--card-bg, #fff)', border: '1px solid var(--border-card, #EEF2F8)', borderRadius: '14px', padding: '4px 16px 10px' }}>
+                      <div style={row}><span style={lbl}>Total Value</span><span style={val}>₹{totalValue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+                      <div style={row}><span style={lbl}>Required Margin</span><span style={{ ...val, color: '#C62E2E' }}>₹{totalMargin.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+                      <div style={{ ...row, cursor: 'pointer' }} onClick={() => setShowChargesBreakdown(!showChargesBreakdown)}>
+                        <span style={{ ...lbl, display: 'flex', alignItems: 'center', gap: '5px' }}>Charges <i className="fas fa-chevron-down" style={{ fontSize: '0.6rem', transition: 'transform 0.2s', transform: showChargesBreakdown ? 'rotate(180deg)' : 'none' }} /></span>
+                        <span style={{ ...val, color: '#C62E2E' }}>₹{totalCharges.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      {showChargesBreakdown && (
+                        <div style={{ padding: '8px 10px 6px', background: 'var(--bg-body, #F5F7FB)', borderRadius: '8px', marginBottom: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {[['Intraday Brokerage', intradayCharges], ['Carry Brokerage', carryCharges]].map(([label, v]) => (
+                            <div key={label as string} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{label}</span>
+                              <span style={{ fontSize: '0.72rem', fontWeight: '700', color: 'var(--text-primary)' }}>₹{(v as number).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '10px' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: '700', color: 'var(--text-primary)' }}>Available Balance</span>
+                        <span style={{ fontSize: '0.88rem', fontWeight: '800', color: '#2C8E5A', background: '#E9F6EF', padding: '4px 12px', borderRadius: '20px' }}>{availableBalance !== null ? `₹${availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '₹0.00'}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+              </div>{/* end scrollable body */}
+
+              {/* Sticky bottom actions */}
+              <div style={{ flexShrink: 0, padding: '14px 20px', paddingBottom: 'max(14px, env(safe-area-inset-bottom))', borderTop: '1px solid var(--border-light, #EEF2F8)', background: 'var(--card-bg, #fff)', display: 'flex', gap: '10px' }}>
+                <button
+                  disabled={isExecutingBasket}
+                  onClick={async () => {
+                    if (isExecutingBasket) return;
+                    let totalRequiredMargin = 0, intradayCharges = 0, carryCharges = 0;
+                    basketLegs.forEach((leg) => {
+                      const price = getLegPrice(leg.item); const seg = mapSegmentToDbSegment(leg.item.segment); const setting = getSegment(seg, leg.side);
+                      const lotSz = getLotSize(leg.item.symbol || leg.item.name || ''); const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty; const exposure = qty * price;
+                      const isIntra = (leg.productType || 'INTRADAY') === 'INTRADAY';
+                      const lev = Number(isIntra ? (setting?.intraday_leverage ?? 10) : (setting?.normal_leverage ?? 10));
+                      const levType = (isIntra ? setting?.intraday_type : setting?.normal_type) ?? 'Multiplier';
+                      if (levType === '%') totalRequiredMargin += exposure * (lev / 100);
+                      else if (levType === 'Fixed') totalRequiredMargin += (qty / lotSz) * lev;
+                      else totalRequiredMargin += exposure / lev;
+                      const commType = (isIntra ? setting?.intraday_commission_type : setting?.commission_type) || setting?.commission_type || 'Per Crore';
+                      let commVal = Number((isIntra ? setting?.intraday_commission_value : setting?.commission_value) ?? setting?.commission_value ?? 0);
+                      if (!setting) { const sU = (leg.item.segment || '').toUpperCase(); commVal = sU.includes('FOREX') ? 2000 : sU.includes('CRYPTO') ? 1000 : 4500; }
+                      let charge = 0;
+                      if (commType === 'Per Crore') charge = (exposure * commVal) / 10000000;
+                      else if (commType === 'Per Lot') charge = (qty / lotSz) * commVal;
+                      else if (commType === 'Per Trade' || commType === 'Flat') charge = commVal;
+                      else charge = exposure * 0.001;
+                      if (isIntra) intradayCharges += charge * 2; else carryCharges += charge * 2;
+                    });
+                    const totalNeeded = totalRequiredMargin + intradayCharges + carryCharges;
+                    const avBal = availableBalance ?? 0;
+                    if (avBal < totalNeeded) { setErrorModalMsg(`Required: ₹${totalNeeded.toLocaleString('en-IN', { minimumFractionDigits: 2 })}\nAvailable: ₹${avBal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`); return; }
+                    setIsExecutingBasket(true);
+                    const safetyTimer = setTimeout(() => setIsExecutingBasket(false), 10000);
+                    try {
+                      const results: boolean[] = [];
+                      for (const leg of basketLegs) {
+                        const ltp = getLegPrice(leg.item);
+                        const lotSz = getLotSize(leg.item.symbol || leg.item.name || '');
+                        const qty = leg.unit === 'lot' ? leg.qty * lotSz : leg.qty;
+                        try {
+                          const res = await placeOrder({
+                            symbol: leg.item.symbol,
+                            kite_instrument: leg.item.kiteSymbol || leg.item.symbol,
+                            segment: leg.item.segment,
+                            side: leg.side,
+                            qty,
+                            lots: leg.unit === 'lot' ? leg.qty : Math.ceil(leg.qty / lotSz),
+                            order_type: 'MARKET',
+                            product_type: leg.productType || 'INTRADAY',
+                            client_price: ltp
+                          });
+                          if (res && !res.success) {
+                            showToast(`${leg.side} ${leg.item.symbol} failed: ${res.error || 'Unknown error'}`, true);
+                            results.push(false);
+                          } else {
+                            results.push(true);
+                          }
+                        } catch (e: any) {
+                          showToast(`${leg.side} ${leg.item.symbol} failed: ${e?.message || 'Unknown error'}`, true);
+                          results.push(false);
+                        }
+                        // Small delay to ensure the Redis lock is fully released
+                        await new Promise((resolve) => setTimeout(resolve, 150));
+                      }
+                      const successCount = results.filter(Boolean).length;
+                      const failCount = results.length - successCount;
+                      if (failCount === 0) {
+                        showToast('Basket executed successfully!', false);
+                        setBasketLegs([]); setBasketMode(false);
+                        ['checkoutSheet', 'basketSheet'].forEach(id => document.getElementById(id)?.classList.remove('open'));
+                        ['checkoutSheetOverlay', 'basketSheetOverlay'].forEach(id => document.getElementById(id)?.classList.remove('active'));
+                      } else {
+                        showToast(`${successCount} order(s) placed, ${failCount} failed.`, true);
+                      }
+                    } finally { clearTimeout(safetyTimer); setIsExecutingBasket(false); }
+                  }}
+                  style={{ flex: 1, background: isExecutingBasket ? '#9CA3AF' : '#2C8E5A', color: '#fff', border: 'none', padding: '15px 0', borderRadius: '14px', fontSize: '0.95rem', fontWeight: '800', cursor: isExecutingBasket ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', boxShadow: isExecutingBasket ? 'none' : '0 4px 12px rgba(44,142,90,0.25)' }}
+                >
+                  {isExecutingBasket ? <><AnimatedLoader size="small" /> Executing...</> : <><i className="fas fa-bolt" style={{ marginRight: '4px' }} /> Confirm &amp; Execute</>}
+                </button>
+                <button
+                  onClick={() => { if (isExecutingBasket) return; const s = document.getElementById('checkoutSheet'); const o = document.getElementById('checkoutSheetOverlay'); if (s) s.classList.remove('open'); if (o) o.classList.remove('active'); }}
+                  disabled={isExecutingBasket}
+                  style={{ flexShrink: 0, background: 'var(--bg-body, #F3F4F6)', color: isExecutingBasket ? '#9CA3AF' : 'var(--text-secondary)', border: '1px solid var(--border-light, #EEF2F8)', padding: '15px 22px', borderRadius: '14px', fontSize: '0.9rem', fontWeight: '700', cursor: isExecutingBasket ? 'not-allowed' : 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+
+            </div>
+
+            <div id="drawerOverlay" className={`drawer-overlay${isFolderDrawerOpen ? ' active' : ''}`} onClick={() => setIsFolderDrawerOpen(false)}></div>
+            <div id="scriptsFolderDrawer" className={`folder-drawer${isFolderDrawerOpen ? ' open' : ''}`}>
+              <div className="drawer-header">
+                <h3>Trading Segments</h3>
+                <button className="close-drawer" onClick={() => setIsFolderDrawerOpen(false)} suppressHydrationWarning><i className="fas fa-times"></i></button>
+              </div>
+              <div className="folder-tree-scroll">
+                {(() => {
+                  const DRAWER_SEG_TO_DB_KEY: Record<string, string> = {
+                    'INDEX-FUT': 'INDEX-FUT',
+                    'INDEX-OPT': 'INDEX-OPT',
+                    'MCX-FUT': 'MCX-FUT',
+                    'MCX-OPT': 'MCX-OPT',
+                    'STOCK-FUT': 'STOCK-FUT',
+                    'STOCK-OPT': 'STOCK-OPT',
+                    'NSE-EQ': 'NSE-EQ',
+                    'CRYPTO': 'CRYPTO',
+                    'COMEX': 'COMEX',
+                    'FOREX': 'FOREX',
+                  };
+                  // Define the desired display order
+                  const SEGMENT_ORDER = ['INDEX-FUT', 'INDEX-OPT', 'MCX-FUT', 'MCX-OPT', 'STOCK-FUT', 'STOCK-OPT', 'NSE-EQ', 'CRYPTO', 'COMEX', 'FOREX'];
+                  const sortedSegments = [...tradingSegments].sort((a, b) => {
+                    const ai = SEGMENT_ORDER.indexOf(a.name);
+                    const bi = SEGMENT_ORDER.indexOf(b.name);
+                    if (ai === -1 && bi === -1) return 0;
+                    if (ai === -1) return 1;
+                    if (bi === -1) return -1;
+                    return ai - bi;
+                  });
+                  const visibleSegments = sortedSegments.filter(seg => {
+                    if (allowedSegments === null) return true; // still loading — show all initially
+                    if (allowedSegments.length === 0) return true;
+                    const dbKey = DRAWER_SEG_TO_DB_KEY[seg.name] ?? seg.name.toUpperCase();
+                    return allowedSegments.includes(dbKey);
+                  });
+                  return visibleSegments.map((seg) => {
+                    // Filter out blocked symbols from this segment's instruments
+                    const filterBlocked = (instruments: any[]) =>
+                      blockedSymbols.size === 0
+                        ? instruments
+                        : instruments.filter(i => !blockedSymbols.has((i.symbol || '').toUpperCase()));
+
+                    const filteredSeg = {
+                      ...seg,
+                      instruments: seg.instruments ? filterBlocked(seg.instruments) : undefined,
+                      subCategories: seg.subCategories
+                        ? seg.subCategories.map((sub: any) => ({
+                          ...sub,
+                          instruments: filterBlocked(sub.instruments || []),
+                        })).filter((sub: any) => sub.instruments.length > 0)
+                        : undefined,
+                    };
+
+                    const count = (filteredSeg.instruments?.length ?? 0) + (filteredSeg.subCategories?.reduce((a: number, s: any) => a + s.instruments.length, 0) ?? 0);
+                    if (count === 0) return null; // hide segment if all instruments are blocked
+                    const isOpen = !!expandedSegments[seg.name];
+                    return (
+                      <div key={seg.name} className="tree-item-li">
+                        <div
+                          className="tree-label-row"
+                          onClick={() => setExpandedSegments(prev => ({ ...prev, [seg.name]: !prev[seg.name] }))}
+                        >
+                          <i className="fas fa-chevron-right chevron-icon" style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}></i>
+                          <span style={{ flex: 1, fontWeight: 700, fontSize: '0.88rem' }}>{seg.name}</span>
+                          <span className="segment-count">{count}</span>
+                        </div>
+                        {isOpen && (
+                          <div className="children-container" style={{ display: 'block' }}>
+                            {filteredSeg.instruments?.map((inst) => (
+                              <div key={inst.symbol} className="script-item">
+                                <span>{inst.name}</span>
+                                <button className="add-script-btn" onClick={() => {
+                                  if (typeof window.__addToWatchlistCallback === 'function') {
+                                    window.__addToWatchlistCallback(inst as WatchlistItem);
+                                    showToast('Added to watchlist', false);
+                                  }
+                                }}>+ Add</button>
+                              </div>
+                            ))}
+                            {filteredSeg.subCategories?.map((sub) => {
+                              const subKey = `${seg.name}__${sub.name}`;
+                              const subOpen = !!expandedSegments[subKey];
+                              return (
+                                <div key={sub.name} className="tree-item-li">
+                                  <div
+                                    className="tree-label-row"
+                                    style={{ paddingTop: '8px', paddingBottom: '8px' }}
+                                    onClick={(e) => { e.stopPropagation(); setExpandedSegments(prev => ({ ...prev, [subKey]: !prev[subKey] })); }}
+                                  >
+                                    <i className="fas fa-chevron-right chevron-icon" style={{ fontSize: '0.55rem', transform: subOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}></i>
+                                    <span style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary, #5B677E)' }}>{sub.name}</span>
+                                    <span className="segment-count">{sub.instruments.length}</span>
+                                  </div>
+                                  {subOpen && (
+                                    <div className="children-container" style={{ display: 'block' }}>
+                                      {sub.instruments.map((inst: any) => (
+                                        <div key={inst.symbol} className="script-item">
+                                          <span>{inst.name}</span>
+                                          <button className="add-script-btn" onClick={() => {
+                                            if (typeof window.__addToWatchlistCallback === 'function') {
+                                              window.__addToWatchlistCallback(inst as WatchlistItem);
+                                              showToast('Added to watchlist', false);
+                                            }
+                                          }}>+ Add</button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+              <div className="drawer-footer"><i className="fas fa-plus-circle"></i> Tap <span style={{ color: '#C62E2E' }}>+ Add</span> to watchlist | Browse all segments</div>
+            </div>
+          </div>
+
+          {/* React-driven order toast */}
+          <div
+            style={{
+              position: 'fixed',
+              bottom: '90px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: toast.isError ? '#C62E2E' : '#1a7a4a',
+              color: '#fff',
+              padding: '8px 16px',
+              borderRadius: '30px',
+              fontSize: '0.72rem',
+              fontWeight: '600',
+              fontFamily: 'Inter, sans-serif',
+              zIndex: 99999,
+              whiteSpace: 'nowrap',
+              maxWidth: '80vw',
+              overflowX: 'hidden',
+              textOverflow: 'ellipsis',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+              opacity: toast.visible ? 1 : 0,
+              visibility: toast.visible ? 'visible' : 'hidden',
+              transition: 'opacity 0.2s ease, visibility 0.2s ease',
+            }}
+          >
+            {toast.msg}
+          </div>
+
+          <div id="chartSheetOverlay" className="trade-sheet-overlay" onClick={() => { const sheet = document.getElementById('chartSheet'); const overlay = document.getElementById('chartSheetOverlay'); if (sheet) sheet.classList.remove('open'); if (overlay) overlay.classList.remove('active'); setChartItem(null); setIsBenchmarkChart(false); }}></div>
+          <div id="chartSheet" className="trade-sheet" style={{ height: '100dvh', paddingBottom: '0', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, position: 'relative', width: '100%', overflow: 'hidden' }}>
+              {chartItem && (() => {
+                const isChartComex = !!chartItem.comexSymbol && (!(chartItem.kiteSymbol) || (chartItem as any).preferredView === 'comex');
+                return (
+                  <TradingChart
+                    key={`${isChartComex ? chartItem.comexSymbol : (chartItem.binanceSymbol || chartItem.kiteSymbol || chartItem.symbol)}-${isChartComex ? 'COMEX' : chartItem.segment}`}
+                    symbol={isChartComex ? (chartItem.comexSymbol || chartItem.symbol) : (chartItem.binanceSymbol || chartItem.kiteSymbol || chartItem.symbol)}
+                    segment={isChartComex ? 'COMEX' : (chartItem.binanceSymbol || ['BTC', 'ETH', 'DOGE', 'SOL', 'XRP', 'ADA', 'BNB', 'DOT', 'LTC'].includes(chartItem.symbol) ? 'CRYPTO' : chartItem.segment)}
+                    liveQuote={isChartComex ? comexQuotes[chartItem.comexSymbol || ''] : (chartItem.binanceSymbol ? marketQuotes[chartItem.binanceSymbol] : marketQuotes[chartItem.kiteSymbol])}
+                  />
+                );
+              })()}
+            </div>
+          </div>
+
+          <ErrorModal error={errorModalMsg} onClose={() => setErrorModalMsg(null)} title="Order Failed" />
         </div>
       </main>
     </div>
@@ -2702,12 +2766,7 @@ function buildInlineScript(allowedSegments: string[], segmentSettings: any[], bl
 
           // 2. For any still missing — fetch from Kite REST via our API
           if (stillMissing.length > 0) {
-            fetch('/api/kite/quotes', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ instruments: stillMissing })
-            })
-              .then(function(r) { return r.ok ? r.json() : { data: {} }; })
+            (window.__apiPostKiteQuotes ? window.__apiPostKiteQuotes(stillMissing) : Promise.resolve({ data: {} }))
               .then(function(json) {
                 var quoteData = (json && json.data) || {};
                 Object.entries(quoteData).forEach(function(entry) {
@@ -2782,17 +2841,10 @@ function buildInlineScript(allowedSegments: string[], segmentSettings: any[], bl
           var signal = currentSearchController.signal;
           var timestamp = new Date().getTime();
 
-          fetch('/api/market/instruments/search?q=' + encodeURIComponent(query) + '&tab=' + encodeURIComponent(activeTab) + '&_t=' + timestamp, {
-            headers: { 'Authorization': 'Bearer ' + (window.__accessToken || '') },
-            signal: signal
-          })
-            .then(function(res) {
-              var ct = res.headers.get('content-type');
-              if (res.ok && ct && ct.indexOf('application/json') !== -1) {
-                return res.json();
-              }
-              return [];
-            })
+          (window.__apiSearchInstruments
+            ? window.__apiSearchInstruments('/api/market/instruments/search?q=' + encodeURIComponent(query) + '&tab=' + encodeURIComponent(activeTab) + '&_t=' + timestamp, signal)
+            : Promise.resolve([])
+          )
             .then(function(liveResults) {
               if (!liveResults || !Array.isArray(liveResults)) return;
               // Check query is still current (guard against tab changes mid-flight)
@@ -2856,6 +2908,22 @@ function buildInlineScript(allowedSegments: string[], segmentSettings: any[], bl
           overlay.classList.remove('active');
         };
       }
+
+      window.__reactSelectAll = function() {
+        var allCheckboxes = document.querySelectorAll('.wc-checkbox');
+        if (allCheckboxes.length === 0) return;
+        
+        var allChecked = true;
+        allCheckboxes.forEach(function(cb) {
+          if (!cb.checked) allChecked = false;
+        });
+        
+        allCheckboxes.forEach(function(cb) {
+          cb.checked = !allChecked;
+        });
+        
+        if (typeof window.__updateSelectionUI === 'function') window.__updateSelectionUI();
+      };
 
       window.__reactDeleteSelected = function() {
         var checkedBoxes = document.querySelectorAll('.wc-checkbox:checked');
@@ -3013,11 +3081,11 @@ export default function WatchlistPage() {
   }, []);
 
   if (!mounted) {
-    return <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading watchlist...</div>;
+    return <AnimatedLoader text="Loading watchlist..." />;
   }
 
   return (
-    <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading watchlist...</div>}>
+    <Suspense fallback={<AnimatedLoader text="Loading watchlist..." />}>
       <WatchlistContent />
     </Suspense>
   );

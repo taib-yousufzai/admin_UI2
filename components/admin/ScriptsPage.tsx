@@ -1504,30 +1504,30 @@ export default function ScriptsPage() {
 
       <div className="page active" id="pageMain">
         <div className="header">
-          <h1>Scripts Management <span>(Templates)</span></h1>
+          <h1>Scripts Management <span>·</span> Admin</h1>
           <div className="super-admin-icon">
-            <div className="icon-wrapper">
-              <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 14.5l-10-5v5l10 5 10-5v-5l-10 5z"/></svg>
-            </div>
-            <div className="label-text">
-              Templates
-              <span className="role-sub">Script Permissions</span>
-            </div>
+            <span className="icon-wrapper">
+              <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5L12 1zm0 2.18l7 3.12v4.7c0 4.83-3.13 9.37-7 10.63-3.87-1.26-7-5.8-7-10.63V6.3l7-3.12z"/>
+                <path d="M12 5.5L9.5 8.5 12 11.5 14.5 8.5 12 5.5z"/>
+                <circle cx="12" cy="14" r="2"/>
+                <path d="M12 16.5c-1.5 0-3 .5-3 1.5v1h6v-1c0-1-1.5-1.5-3-1.5z"/>
+              </svg>
+            </span>
+            <span className="label-text">
+              Super Admin
+              <span className="role-sub">Scripts Allowed</span>
+            </span>
           </div>
         </div>
 
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Configure Allowed Scripts</h2>
-            <span className="badge-role">per template</span>
+        <div className="panel" style={{ marginBottom: '24px' }}>
+          <div className="panel-header" style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: 0 }}>
+             <h2 style={{ fontSize: '16px' }}>Template Selection</h2>
           </div>
-
-          
-          <div className="template-selector" style={{ marginBottom: 24, display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div>
-              <label style={{display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--grey-600)', marginBottom: '6px'}}>Select Template</label>
-              <select
-                style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid var(--grey-200)', background: 'var(--white)', fontSize: 14, width: '300px', fontFamily: 'inherit' }}
+          <div style={{ marginTop: '16px' }}>
+             <select
+                style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid var(--grey-200)', background: 'var(--white)', fontSize: 14, minWidth: '300px', fontFamily: 'inherit' }}
                 value={selectedTemplate?.id || ''}
                 onChange={e => {
                   const tmpl = templates.find(t => t.id === e.target.value);
@@ -1538,210 +1538,132 @@ export default function ScriptsPage() {
                   <option key={t.id} value={t.id}>{t.name} {t.is_default ? '(Default)' : ''}</option>
                 ))}
               </select>
-            </div>
-            {selectedTemplate && !selectedTemplate.is_default && (
-              <div style={{ marginTop: '20px' }}>
-                <button 
-                  style={{ padding: '10px 24px', background: 'var(--blue)', color: 'white', border: 'none', borderRadius: '40px', fontWeight: 600, cursor: 'pointer' }}
-                  onClick={handleSetDefault}
-                  disabled={settingDefault}
-                >
-                  {settingDefault ? 'Setting...' : 'Set as Default Template'}
-                </button>
-              </div>
-            )}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <h2>Configure Allowed Scripts</h2>
+            <span className="badge-role">per segment</span>
           </div>
 
-          <div className="user-selection" style={{ padding: '16px', background: 'var(--grey-50)', borderRadius: '8px', border: '1px solid var(--grey-200)', marginBottom: '16px' }}>
-            <div className="user-select-header" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <span className="user-label" style={{ fontWeight: 600, color: 'var(--dark)', marginTop: '8px', minWidth: '120px' }}>Apply to Users</span>
-              <div className="user-search" style={{ position: 'relative', flexGrow: 1, maxWidth: '400px' }}>
-                <input 
-                  type="text" 
-                  placeholder="Search users..." 
-                  style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--grey-200)' }}
-                  value={userSearchQuery}
-                  onChange={e => { setUserSearchQuery(e.target.value); setUserDropdownOpen(true); }}
-                  onFocus={() => setUserDropdownOpen(true)}
-                  onBlur={() => setTimeout(() => setUserDropdownOpen(false), 200)}
-                />
-                {userDropdownOpen && (
-                  <div className="dropdown-list" style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--grey-200)', borderRadius: '6px', marginTop: '4px', maxHeight: '200px', overflowY: 'auto', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                    {allUsers.filter(u => !selectedUsers.find(su => su.id === u.id) && (u.first_name.toLowerCase().includes(userSearchQuery.toLowerCase()) || (u.last_name || '').toLowerCase().includes(userSearchQuery.toLowerCase()) || u.user_id.toLowerCase().includes(userSearchQuery.toLowerCase()))).slice(0, 20).map(u => (
-                      <div key={u.id} style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--grey-100)' }} onMouseDown={() => setSelectedUsers([...selectedUsers, u])}>
-                        <div style={{ fontWeight: 600, fontSize: '13px' }}>{u.first_name} {u.last_name}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--grey-400)' }}>{u.user_id}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          <div className="user-selection">
+            <div className="user-select-header">
+              <span className="user-label">Apply to Users</span>
+              <div className="user-search">
+                <div className="user-dropdown">
+                  <input type="text" placeholder="Search users..." value={userSearchQuery} onChange={e => { setUserSearchQuery(e.target.value); setUserDropdownOpen(true); }} onFocus={() => setUserDropdownOpen(true)} onBlur={() => setTimeout(() => setUserDropdownOpen(false), 200)} />
+                  {userDropdownOpen && (
+                    <div className="dropdown-list show">
+                      {allUsers.filter(u => !selectedUsers.find(su => su.id === u.id) && (u.first_name.toLowerCase().includes(userSearchQuery.toLowerCase()) || (u.last_name || '').toLowerCase().includes(userSearchQuery.toLowerCase()) || u.user_id.toLowerCase().includes(userSearchQuery.toLowerCase()))).slice(0, 20).map(u => (
+                        <div key={u.id} className="dropdown-item" onMouseDown={() => setSelectedUsers([...selectedUsers, u])}>
+                          <div>{u.first_name} {u.last_name}</div>
+                          <div className="user-role">{u.user_id}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="quick-apply" style={{ display: 'flex', gap: '12px', marginTop: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className="quick-label" style={{ fontSize: '13px', color: 'var(--grey-600)' }}>Quick Apply:</span>
-              <button style={{ padding: '6px 12px', borderRadius: '40px', background: 'var(--blue)', color: 'white', border: 'none', fontSize: '12px', cursor: 'pointer' }} onClick={() => setSelectedUsers(allUsers)}>Apply to All</button>
-              <button style={{ padding: '6px 12px', borderRadius: '40px', background: '#ec4899', color: 'white', border: 'none', fontSize: '12px', cursor: 'pointer' }} onClick={() => setSelectedUsers(allUsers.filter(u => u.is_demo))}>Demo Accounts</button>
-              <button style={{ padding: '6px 12px', borderRadius: '40px', background: 'transparent', color: 'var(--grey-600)', border: '1px solid var(--grey-200)', fontSize: '12px', cursor: 'pointer' }} onClick={() => setSelectedUsers([])}>Clear All</button>
+            <div className="quick-apply">
+              <span className="quick-label">Quick Apply:</span>
+              <button className="quick-btn primary-btn" onClick={() => setSelectedUsers(allUsers)}>Apply to All <span className="badge-count">{allUsers.length}</span></button>
+              <button className="quick-btn demo-btn" onClick={() => setSelectedUsers(allUsers.filter(u => u.is_demo))}>Demo Accounts <span className="badge-count">{allUsers.filter(u => u.is_demo).length}</span></button>
+              <button className="quick-btn" onClick={() => setSelectedUsers([])}>Clear All</button>
               
               {selectedUsers.length > 0 && (
                 <button 
-                   style={{ padding: '6px 16px', borderRadius: '40px', background: 'var(--green)', color: 'white', border: 'none', fontSize: '12px', cursor: 'pointer', marginLeft: 'auto', fontWeight: 'bold' }} 
-                   onClick={handleApplyToUsers}
-                   disabled={applyingUsers}
+                   className="quick-btn primary-btn" 
+                   style={{ marginLeft: 'auto', background: 'var(--green)', color: 'white', borderColor: 'var(--green)' }}
+                   onClick={handleApplyToUsers} disabled={applyingUsers}
                 >
                    {applyingUsers ? 'Saving...' : `Save (${selectedUsers.length})`}
                 </button>
               )}
             </div>
 
-            <div className="selected-users" style={{ marginTop: '16px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {selectedUsers.length === 0 ? <span style={{ fontSize: '13px', color: 'var(--grey-400)' }}>No users selected</span> : (
+            <div className="selected-users">
+              {selectedUsers.length === 0 ? <span className="empty-users">No users selected</span> : (
                 selectedUsers.map(u => (
-                  <span key={u.id} style={{ padding: '4px 8px', background: 'var(--white)', border: '1px solid var(--grey-200)', borderRadius: '4px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span key={u.id} className="user-tag">
                     {u.first_name}
-                    <button style={{ background: 'none', border: 'none', color: 'var(--grey-400)', cursor: 'pointer', padding: 0 }} onClick={() => setSelectedUsers(selectedUsers.filter(su => su.id !== u.id))}>✕</button>
+                    <span className="remove-user" onClick={() => setSelectedUsers(selectedUsers.filter(su => su.id !== u.id))}>✕</span>
                   </span>
                 ))
               )}
             </div>
           </div>
 
-          <div className="copy-section" style={{ padding: '16px', background: 'var(--white)', borderRadius: '8px', border: '1px solid var(--grey-200)', marginBottom: '24px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="copy-label" style={{ fontWeight: 600, color: 'var(--dark)' }}>Copy Scripts From:</span>
-            <div className="copy-search-wrap" style={{ position: 'relative', flexGrow: 1, maxWidth: '300px' }}>
-              <input 
-                type="text" 
-                placeholder="Search user..." 
-                style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--grey-200)' }}
-                value={copySearchQuery}
-                onChange={e => { setCopySearchQuery(e.target.value); setCopyDropdownOpen(true); }}
-                onFocus={() => setCopyDropdownOpen(true)}
-                onBlur={() => setTimeout(() => setCopyDropdownOpen(false), 200)}
-              />
+          <div className="copy-section">
+            <span className="copy-label">Copy Scripts From:</span>
+            <div className="copy-search-wrap">
+              <input type="text" placeholder="Search user by name or ID..." value={copySearchQuery} onChange={e => { setCopySearchQuery(e.target.value); setCopyDropdownOpen(true); }} onFocus={() => setCopyDropdownOpen(true)} onBlur={() => setTimeout(() => setCopyDropdownOpen(false), 200)} />
               {copyDropdownOpen && (
-                <div className="copy-dropdown" style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid var(--grey-200)', borderRadius: '6px', marginTop: '4px', maxHeight: '200px', overflowY: 'auto', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+                <div className="copy-dropdown show">
                   {allUsers.filter(u => u.first_name.toLowerCase().includes(copySearchQuery.toLowerCase()) || (u.last_name || '').toLowerCase().includes(copySearchQuery.toLowerCase()) || u.user_id.toLowerCase().includes(copySearchQuery.toLowerCase())).slice(0, 20).map(u => (
-                    <div key={u.id} style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--grey-100)' }} onMouseDown={() => { setSelectedCopyUser(u); setCopySearchQuery(''); }}>
-                      <div style={{ fontWeight: 600, fontSize: '13px' }}>{u.first_name} {u.last_name}</div>
+                    <div key={u.id} className="copy-item" onMouseDown={() => { setSelectedCopyUser(u); setCopySearchQuery(''); }}>
+                      <div>{u.first_name} {u.last_name}</div>
+                      <div className="user-role">{u.user_id}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
             
-            {selectedCopyUser && (
-              <span style={{ padding: '6px 12px', background: 'var(--grey-50)', border: '1px solid var(--grey-200)', borderRadius: '4px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {selectedCopyUser.first_name} {selectedCopyUser.last_name}
-                <button style={{ background: 'none', border: 'none', color: 'var(--grey-400)', cursor: 'pointer', padding: 0 }} onClick={() => setSelectedCopyUser(null)}>✕</button>
-              </span>
-            )}
-            
-            <button 
-               style={{ padding: '8px 16px', borderRadius: '6px', background: selectedCopyUser ? 'var(--dark)' : 'var(--grey-200)', color: selectedCopyUser ? 'white' : 'var(--grey-400)', border: 'none', fontWeight: 600, cursor: selectedCopyUser ? 'pointer' : 'not-allowed' }}
-               disabled={!selectedCopyUser || copyingScripts}
-               onClick={handleCopyScripts}
-            >
+            <button className="copy-btn" disabled={!selectedCopyUser || copyingScripts} onClick={handleCopyScripts}>
                {copyingScripts ? 'Copying...' : 'Copy Scripts'}
             </button>
+            
+            <span className={`selected-copy-user ${selectedCopyUser ? 'show' : ''}`}>
+              <span>{selectedCopyUser?.first_name} {selectedCopyUser?.last_name}</span>
+              <span className="clear-copy" onClick={() => setSelectedCopyUser(null)}>✕</span>
+            </span>
           </div>
-
 
           <div className="segment-nav">
             {SEGMENTS.map(seg => (
               <div key={seg} className={`seg-item ${activeSegment === seg ? 'active' : ''}`}>
-                <button 
-                  className={`seg-tab ${activeSegment === seg ? 'active' : ''}`}
-                  onClick={() => {
-                    setActiveSegment(seg);
-                    setInstrSearch(''); // clear search on segment change
-                  }}
-                >
+                <button className={`seg-tab ${activeSegment === seg ? 'active' : ''}`} onClick={() => { setActiveSegment(seg); setInstrSearch(''); }}>
                   {seg}
                 </button>
+                <div className={`seg-toggle ${activeSegment === seg ? 'active' : ''}`} onClick={() => { setActiveSegment(seg); setInstrSearch(''); }}></div>
               </div>
             ))}
+            
+            <button className="all-scripts-btn" style={{ marginLeft: 'auto' }} onClick={() => document.getElementById('pageSearchInput')?.focus()}>
+              Add Scripts
+            </button>
+            <button className={`remove-mode-toggle ${removeMode ? 'active' : ''}`} onClick={() => setRemoveMode(!removeMode)}>
+              {removeMode ? 'Disable Remove Mode' : 'Enable Remove Mode'}
+            </button>
+            <span className="selected-count">{templateScripts.length} Allowed</span>
           </div>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-            <div className="page-search" style={{ flexGrow: 1, position: 'relative' }}>
-              <input 
-                type="text" 
-                style={{ width: '100%', padding: '10px 16px', borderRadius: '40px', border: '1px solid var(--grey-200)' }}
-                placeholder={`Search ${activeSegment} (e.g. ${SEGMENT_DEFAULTS[activeSegment] || 'NIFTY'})...`}
-                value={instrSearch}
-                onChange={e => handleSearchChange(e.target.value)}
-              />
-            </div>
-            
-            <button 
-              className={`remove-mode-toggle ${removeMode ? 'active' : ''}`}
-              style={{ padding: '10px 22px', borderRadius: '40px', border: '1px solid var(--red)', background: removeMode ? 'var(--red)' : 'transparent', color: removeMode ? 'white' : 'var(--red)', fontWeight: 600, cursor: 'pointer' }}
-              onClick={() => setRemoveMode(!removeMode)}
-            >
-              {removeMode ? '✕ Cancel Remove' : 'Remove Mode'}
-            </button>
+          <div className="page-search-bar" style={{ marginBottom: '16px' }}>
+              <input type="text" id="pageSearchInput" placeholder={`Search ${activeSegment} (e.g. ${SEGMENT_DEFAULTS[activeSegment] || 'NIFTY'})...`} value={instrSearch} onChange={e => handleSearchChange(e.target.value)} />
           </div>
 
           <div id="scriptsContainer">
-            <div className="scripts-grid" style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: '12px'
-            }}>
+            <div className="scripts-grid">
               {templateScriptsLoading || instrLoading ? (
                 <div className="empty-scripts">Loading scripts...</div>
               ) : scriptsToShow.length === 0 ? (
                 <div className="empty-scripts">No scripts allowed or matching search.</div>
               ) : (
                 scriptsToShow.map(script => (
-                  <div 
-                    key={script.symbol} 
-                    className={`script-item ${removeMode && script.allowed ? 'remove-mode' : ''}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: '10px 14px',
-                      borderRadius: '8px',
-                      border: '1px solid var(--grey-200)',
-                      background: 'var(--white)',
-                      gap: '8px',
-                      cursor: removeMode ? 'default' : 'pointer'
-                    }}
-                    onClick={(e) => {
+                  <div key={script.symbol} className={`script-item ${removeMode && script.allowed ? 'remove-mode' : ''}`} onClick={(e) => {
                       if (removeMode || addingSymbols.has(script.symbol)) return;
-                      // Don't toggle if clicking a button inside
                       if ((e.target as HTMLElement).closest('button')) return;
                       handleToggleScript(script.symbol, !script.allowed);
-                    }}
-                  >
-                    <input 
-                      type="checkbox" 
-                      className={`script-checkbox ${removeMode && script.allowed ? 'hidden' : ''}`}
-                      checked={script.allowed}
-                      readOnly
-                      style={{ 
-                        display: (removeMode && script.allowed) ? 'none' : 'inline-block'
-                      }}
-                    />
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span className="script-name" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--dark)' }}>
-                        {script.name || script.symbol}
-                      </span>
-                      {script.name && script.name !== script.symbol && (
-                        <span style={{ fontSize: '10px', color: 'var(--grey-400)' }}>{script.symbol}</span>
-                      )}
-                    </div>
+                  }}>
+                    <input type="checkbox" className={`script-checkbox ${removeMode && script.allowed ? 'hidden' : ''}`} checked={script.allowed} readOnly />
+                    <span className="script-name">{script.name || script.symbol}</span>
+                    <span className="script-symbol">{script.symbol}</span>
                     {addingSymbols.has(script.symbol) && <span style={{marginLeft: 'auto', fontSize: 10, color: '#888'}}>...</span>}
-                    
                     {removeMode && script.allowed && (
-                      <button 
-                        style={{ marginLeft: 'auto', background: 'var(--red)', color: 'white', border: 'none', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '12px' }}
-                        onClick={(e) => handleRemoveSingle(script.symbol, e)}
-                        title="Remove this script"
-                      >
-                        ✕
-                      </button>
+                      <button className="remove-script-btn visible" onClick={(e) => handleRemoveSingle(script.symbol, e)} title="Remove this script">✕</button>
                     )}
                   </div>
                 ))
@@ -1749,28 +1671,20 @@ export default function ScriptsPage() {
             </div>
           </div>
 
-          <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', borderTop: '1px solid var(--grey-200)', paddingTop: '20px' }}>
-            <button 
-              style={{ width: '100%', padding: '12px 24px', background: '#000000', color: '#ffffff', border: 'none', borderRadius: '40px', fontWeight: 600, cursor: (selectedTemplate?.is_default || settingDefault) ? 'not-allowed' : 'pointer' }}
-              onClick={handleSetDefault}
-              disabled={selectedTemplate?.is_default || settingDefault}
-            >
-              {settingDefault ? 'Setting...' : 'Set as Default'}
-            </button>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' }}>
-              <div style={{ width: '100%', height: '1px', background: 'var(--grey-200)' }} />
-              <div style={{ width: '100%', height: '1px', background: 'var(--grey-200)' }} />
-            </div>
-            
-            <button 
-              style={{ width: '100%', padding: '12px 24px', background: '#000000', color: '#ffffff', border: 'none', borderRadius: '40px', fontWeight: 600, cursor: 'pointer' }}
-              onClick={() => setToast({ message: 'Changes saved successfully', type: 'success' })}
-            >
-              Save Changes
+          <div className="default-scripts-row">
+            <button className="set-default-btn" onClick={handleSetDefault} disabled={selectedTemplate?.is_default || settingDefault}>
+              {settingDefault ? 'Setting...' : (selectedTemplate?.is_default ? 'Currently Default' : 'Set as Default')}
             </button>
           </div>
-          
+
+          <div className="form-actions">
+            <div className="left-group">
+              <button type="button" className="btn-secondary" onClick={() => loadTemplates()}>Reset</button>
+            </div>
+            <div className="right-group">
+              <button type="button" className="btn-primary" onClick={() => setToast({ message: 'Changes saved successfully', type: 'success' })}>Save Settings</button>
+            </div>
+          </div>
         </div>
       </div>
       

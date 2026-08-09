@@ -2,11 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
 import { ErrorModal } from '@/components/ErrorModal';
 import { useAuth } from '@/hooks/useAuth';
 import { getSession } from '@/lib/auth';
+import { api } from '@/lib/api';
+import AnimatedLoader from '@/components/AnimatedLoader';
 import './page.css';
 
 interface WatchlistItem {
@@ -128,11 +128,8 @@ export default function LearningPage() {
       if (maxPriceFilter) params.append('maxPrice', maxPriceFilter);
       if (minVolFilter) params.append('minVolume', minVolFilter);
 
-      const res = await fetch(`/api/market/scanner?${params.toString()}`);
-      if (res.ok) {
-        const data = await res.json();
-        setScannerResults(data || []);
-      }
+      const data = await api.get<ScannerResult[]>(`/api/market/scanner?${params.toString()}`);
+      setScannerResults(data || []);
     } catch (err) {
       console.error('Scanner run failed:', err);
     } finally {
@@ -189,7 +186,7 @@ export default function LearningPage() {
   if (authLoading) {
     return (
       <div className="empty-panel-state" style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <i className="fas fa-circle-notch fa-spin"></i>
+        <AnimatedLoader />
         <span>Authenticating session...</span>
       </div>
     );
@@ -199,8 +196,7 @@ export default function LearningPage() {
 
   return (
     <div className="desktop-layout">
-      <Sidebar />
-
+      
       <main className="main-viewport">
         <div className="app-container">
           <div className="main-scroll-wrapper" style={{ paddingBottom: 'calc(var(--footer-nav-height, 65px) + env(safe-area-inset-bottom, 0px) + 24px)' }}>
@@ -276,7 +272,7 @@ export default function LearningPage() {
                         >
                           {scanningLoading ? (
                             <>
-                              <i className="fas fa-circle-notch fa-spin"></i>
+                              <AnimatedLoader size="small" />
                               <span>Scanning...</span>
                             </>
                           ) : (
@@ -378,8 +374,7 @@ export default function LearningPage() {
               )}
             </div>
           </div>
-          <Footer activeTab="home" />
-        </div>
+                  </div>
       </main>
       <ErrorModal error={modalError} onClose={() => setModalError(null)} title="Notice" />
     </div>

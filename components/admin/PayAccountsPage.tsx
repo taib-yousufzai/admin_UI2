@@ -1,8 +1,8 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
-import { signOut } from '@/lib/auth';
 import { apiCall, Toast, ToastState, SkeletonLine, SkeletonCard, ConfirmDialog } from './AdminUtils';
+import QRCode from 'react-qr-code';
 
 export type PaymentAccount = {
   id: string;
@@ -116,6 +116,12 @@ export default function PaymentAccountsPage({ isBroker = false }: { isBroker?: b
     setEditingAccount(null);
     setForm(emptyPAForm());
     setShowAddForm(true);
+  };
+
+  const handleCopy = (text: string, label: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setPaToast({ message: `Copied ${label} to clipboard!`, type: 'success' });
   };
 
   const handleOpenEdit = (account: PaymentAccount) => {
@@ -379,60 +385,83 @@ export default function PaymentAccountsPage({ isBroker = false }: { isBroker?: b
                 </span>
               </div>
               <div className="bkm-bank-details">
-                <div className="bkm-detail-item">
+                <div className="bkm-detail-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span className="label">Holder:</span>
                   <span className="value">{a.account_holder}</span>
                 </div>
-                <div className="bkm-detail-item">
+                <div className="bkm-detail-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span className="label">A/C No:</span>
-                  <span className="value">{a.account_no}</span>
+                  <span className="value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {a.account_no}
+                    <button onClick={() => handleCopy(a.account_no, 'Account No')} style={{ background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', padding: '2px' }} title="Copy A/C No">
+                      <i className="far fa-copy" style={{ fontSize: '11px' }}></i>
+                    </button>
+                  </span>
                 </div>
-                <div className="bkm-detail-item">
+                <div className="bkm-detail-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span className="label">IFSC:</span>
-                  <span className="value">{a.ifsc}</span>
+                  <span className="value" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {a.ifsc}
+                    <button onClick={() => handleCopy(a.ifsc, 'IFSC')} style={{ background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer', padding: '2px' }} title="Copy IFSC">
+                      <i className="far fa-copy" style={{ fontSize: '11px' }}></i>
+                    </button>
+                  </span>
                 </div>
-                <div className="bkm-detail-item">
+                <div className="bkm-detail-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span className="label">Limit:</span>
                   <span className="value">₹{(a.deposit_limit || 50000).toLocaleString()}</span>
                 </div>
               </div>
               
-              <div className="bkm-bank-qr">
-                <div className="bkm-qr-placeholder">
-                  {a.qr_image_url ? (
-                    <img src={a.qr_image_url} alt="QR" />
+              <div className="bkm-bank-qr" style={{ display: 'flex', alignItems: 'center', gap: '14px', background: '#0d1117', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
+                <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {a.upi_id ? (
+                    <QRCode
+                      value={`upi://pay?pa=${encodeURIComponent(a.upi_id)}&pn=${encodeURIComponent(a.account_holder || a.bank_name)}&cu=INR`}
+                      size={64}
+                    />
                   ) : (
-                    <i className="fas fa-qrcode"></i>
+                    <i className="fas fa-qrcode" style={{ fontSize: '40px', color: '#333' }}></i>
                   )}
                 </div>
-                <div className="bkm-qr-info">
-                  UPI ID: <br/> <span className="upi-id">{a.upi_id}</span>
+                <div className="bkm-qr-info" style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: '#8b949e', textTransform: 'uppercase', fontWeight: 600 }}>UPI ID</div>
+                  <div className="upi-id" style={{ fontSize: '12px', fontWeight: 600, color: '#58a6ff', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                    {a.upi_id || 'N/A'}
+                    {a.upi_id && (
+                      <button onClick={() => handleCopy(a.upi_id, 'UPI ID')} style={{ background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer' }} title="Copy UPI">
+                        <i className="far fa-copy" style={{ fontSize: '12px' }}></i>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="bkm-role-assignments">
-                {(a.roles || ['super-admin', 'admin', 'user']).map(r => (
-                  <span key={r} className={`bkm-role-tag ${r}`}>{r.replace('-', ' ')}</span>
-                ))}
-              </div>
-
-              <div className="bkm-bank-rotation">
-                <div className="bkm-rotation-label">Rotation: {a.rotation_mode || 'after_txn'}</div>
-                <div className="bkm-rotation-details">
-                  <span>Count: {a.txn_limit || 10}</span>
-                </div>
-              </div>
-
-              <div className="bkm-bank-progress">
-                <div className={`progress-bar ${a.is_active ? 'green' : 'red'}`} style={{ width: a.is_active ? '80%' : '10%' }}></div>
-              </div>
-
-              <div className="bkm-bank-actions">
-                <button className="btn-rotate" onClick={() => handleToggleActive(a)} disabled={paActionLoading[a.id]}>
-                  <i className="fas fa-sync-alt"></i> {paActionLoading[a.id] ? '...' : (a.is_active ? 'Pause' : 'Activate')}
+              <div style={{ marginTop: '14px', paddingTop: '10px', borderTop: '1px solid #21262d', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <button
+                  onClick={() => handleToggleActive(a)}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    border: '1px solid',
+                    cursor: 'pointer',
+                    background: a.is_active ? 'rgba(35, 134, 54, 0.15)' : 'rgba(248, 81, 73, 0.15)',
+                    borderColor: a.is_active ? '#238636' : '#f85149',
+                    color: a.is_active ? '#3fb950' : '#f85149',
+                  }}
+                >
+                  {a.is_active ? '● Active' : '○ Inactive'}
                 </button>
-                <button className="btn-edit" onClick={() => handleOpenEdit(a)}><i className="fas fa-pen"></i> Edit</button>
-                <button className="btn-delete" onClick={() => setDeleteTarget(a)}><i className="fas fa-trash"></i> Delete</button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button className="bkm-btn-edit" onClick={() => handleOpenEdit(a)} title="Edit Account">
+                    <i className="fas fa-edit"></i> Edit
+                  </button>
+                  <button className="bkm-btn-delete" onClick={() => setDeleteTarget(a)} title="Delete Account">
+                    <i className="fas fa-trash-alt"></i>
+                  </button>
+                </div>
               </div>
             </div>
           ))}

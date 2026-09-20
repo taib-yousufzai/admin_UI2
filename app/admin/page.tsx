@@ -32,6 +32,7 @@ import BrokersPage from '@/components/admin/BrokersPage';
 import AdminsPage from '@/components/admin/AdminsPage';
 import { AdminErrorBoundary, clearAdminAuthCache, Toast, ToastState } from '@/components/admin/AdminUtils';
 import AdminRiskBar from '@/components/admin/AdminRiskBar';
+import AdminAlertCenter from '@/components/admin/AdminAlertCenter';
 // We will now group the navigation items directly in the render function.
 
 export default function AdminPage() {
@@ -241,6 +242,7 @@ export default function AdminPage() {
               <span /><span /><span />
             </button>
             <KiteConnectButton />
+            <AdminAlertCenter isDemoMode={isDemoMode} onNavigate={(tab) => { window.location.hash = tab; }} />
           </div>
 
           <div style={{ flex: 1, maxWidth: '800px', display: 'flex', justifyContent: 'flex-end' }}>

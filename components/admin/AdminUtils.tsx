@@ -164,14 +164,37 @@ export function downloadCSV(data: Record<string, unknown>[], filename: string) {
   document.body.removeChild(link);
 }
 
-// ─── API helper ───────────────────────────────────────────────────────────────
+// ─── Token Cache & API helper ────────────────────────────────────────────────
+let cachedToken: string | null = null;
+let tokenExpiry = 0;
+
+export async function getAdminAuthToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedToken && tokenExpiry > now + 60000) {
+    return cachedToken;
+  }
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token ?? '';
+    cachedToken = token;
+    tokenExpiry = (sessionData.session?.expires_at ? sessionData.session.expires_at * 1000 : now + 3600000);
+    return token;
+  } catch {
+    return '';
+  }
+}
+
+export function clearAdminAuthCache() {
+  cachedToken = null;
+  tokenExpiry = 0;
+}
+
 export async function apiCall(
   path: string,
   options: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   try {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token ?? '';
+    const token = await getAdminAuthToken();
     const res = await fetch(path, {
       ...options,
       headers: {
@@ -181,6 +204,10 @@ export async function apiCall(
       },
     });
     
+    if (res.status === 401) {
+      clearAdminAuthCache();
+    }
+
     // Handle empty responses (like 204 No Content)
     if (res.status === 204) {
       return { ok: res.ok, status: res.status, data: null };
@@ -191,6 +218,49 @@ export async function apiCall(
   } catch (err) {
     console.warn(`apiCall error [${path}]:`, err);
     return { ok: false, status: 500, data: { error: 'Network or Authentication Error' } };
+  }
+}
+
+// ─── Error Boundary ──────────────────────────────────────────────────────────
+export class AdminErrorBoundary extends React.Component<
+  { children: React.ReactNode; tabName?: string },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode; tabName?: string }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(`[AdminErrorBoundary] Error in tab ${this.props.tabName || 'unknown'}:`, error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '32px', textAlign: 'center', background: '#161b22', borderRadius: '12px', margin: '24px', border: '1px solid #30363d' }}>
+          <i className="fas fa-exclamation-triangle" style={{ fontSize: '32px', color: '#f85149', marginBottom: '16px' }}></i>
+          <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#f0f6fc', marginBottom: '8px' }}>
+            Failed to load {this.props.tabName ? this.props.tabName.toUpperCase() : 'module'}
+          </h3>
+          <p style={{ fontSize: '13px', color: '#8b949e', marginBottom: '20px' }}>
+            {this.state.error?.message || 'An unexpected rendering error occurred.'}
+          </p>
+          <button
+            className="adm-btn-primary"
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{ padding: '8px 20px', borderRadius: '6px', cursor: 'pointer' }}
+          >
+            Retry Module
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
   }
 }
 

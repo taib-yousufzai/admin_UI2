@@ -45,7 +45,7 @@ export default function CreateUserForm({ onBack, onCreated, isDemoMode, callerRo
       body: JSON.stringify({
         email, password, username: userId, full_name: fullName, phone,
         role, parent_id: '', segments: SEGMENTS, active: toggles.active,
-        read_only: toggles.readOnly, demo_user: toggles.demoUser,
+        read_only: toggles.readOnly, demo_user: !!(isDemoMode || toggles.demoUser),
         intraday_sq_off: toggles.intradaySqOff, auto_sqoff: 90,
         showcase_auto_sqoff: 85, sqoff_method: 'Credit',
       }),

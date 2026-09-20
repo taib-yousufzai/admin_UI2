@@ -8,16 +8,14 @@ import { Permission } from '@/lib/permissions';
 import './Sidebar.css';
 
 const navItems: { key: string, label: string, icon: string, path: string, perm?: Permission }[] = [
-  { key: 'home', label: 'Dashboard', icon: 'fas fa-th-large', path: '/' },
-  { key: 'watchlist', label: 'Watchlist', icon: 'fas fa-list', path: '/watchlist' },
-  { key: 'order', label: 'Orders', icon: 'fas fa-file-invoice-dollar', path: '/order', perm: 'VIEW_OWN_ORDERS' },
-  { key: 'position', label: 'Positions', icon: 'fas fa-chart-line', path: '/position', perm: 'VIEW_OWN_POSITIONS' },
-  { key: 'history', label: 'History', icon: 'fas fa-history', path: '/history', perm: 'VIEW_OWN_TRADES' },
-  { key: 'funds', label: 'Funds', icon: 'fas fa-wallet', path: '/funds', perm: 'VIEW_OWN_WALLET' },
-  { key: 'rules', label: 'Rules', icon: 'fas fa-file-contract', path: '/rules' },
-  { key: 'profile', label: 'Profile', icon: 'fas fa-user-circle', path: '/profile', perm: 'VIEW_OWN_PROFILE' },
+  { key: 'dashboard', label: 'Dashboard', icon: 'fas fa-chart-pie', path: '/admin#dashboard' },
+  { key: 'marketwatch', label: 'MarketWatch', icon: 'fas fa-chart-line', path: '/admin#marketwatch' },
+  { key: 'orders', label: 'Orders', icon: 'fas fa-file-invoice-dollar', path: '/admin#orders' },
+  { key: 'positions', label: 'Positions', icon: 'fas fa-layer-group', path: '/admin#position' },
   { key: 'users', label: 'Users', icon: 'fas fa-users', path: '/admin#users', perm: 'VIEW_USERS' },
-  { key: 'admin', label: 'Admin', icon: 'fas fa-cogs', path: '/admin#settings', perm: 'MANAGE_GLOBAL_SETTINGS' },
+  { key: 'finance', label: 'Finance & Ledger', icon: 'fas fa-wallet', path: '/admin#actledger' },
+  { key: 'diagnostics', label: 'Diagnostics', icon: 'fas fa-heartbeat', path: '/admin/diagnostics' },
+  { key: 'settings', label: 'Settings', icon: 'fas fa-cogs', path: '/admin#settings', perm: 'MANAGE_GLOBAL_SETTINGS' },
 ];
 
 export default function Sidebar() {

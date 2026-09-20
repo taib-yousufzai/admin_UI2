@@ -30,7 +30,7 @@ import UserPanel from '@/components/admin/UserPanel';
 import TemplatesPage from '@/components/admin/TemplatesPage';
 import BrokersPage from '@/components/admin/BrokersPage';
 import AdminsPage from '@/components/admin/AdminsPage';
-
+import { AdminErrorBoundary, clearAdminAuthCache } from '@/components/admin/AdminUtils';
 // We will now group the navigation items directly in the render function.
 
 export default function AdminPage() {
@@ -107,6 +107,7 @@ export default function AdminPage() {
   if (isChecking) return null;
 
   const handleLogout = () => {
+    clearAdminAuthCache();
     sessionStorage.removeItem('adminActivePage');
     signOut();
   };
@@ -268,43 +269,66 @@ function PageContent({ activePage, selectedUser, onSelectUser, onOpenUserPanel, 
   isDemoMode: boolean;
   userRole: string;
 }) {
-  const show = (key: string) => ({ display: activePage === key ? undefined : 'none' } as React.CSSProperties);
+  const renderTab = () => {
+    switch (activePage) {
+      case 'telegram':
+        return <TelegramPage />;
+      case 'settings':
+        return <SettingsPage />;
+      case 'marketwatch':
+        return <MarketWatchPage />;
+      case 'dashboard':
+        return <DashboardPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} />;
+      case 'orders':
+        return <OrdersPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} />;
+      case 'position':
+        return <PositionPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} />;
+      case 'update':
+        return <UpdatePage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} />;
+      case 'users':
+        return <UsersPage selectedUser={selectedUser} onSelectUser={onSelectUser} onNavigate={onNavigate} isDemoMode={isDemoMode} />;
+      case 'brokers':
+        return <BrokersPage isDemoMode={isDemoMode} />;
+      case 'admins':
+        return <AdminsPage isDemoMode={isDemoMode} />;
+      case 'templates':
+        return <TemplatesPage isDemoMode={isDemoMode} />;
+      case 'create':
+        return (
+          <CreateUserForm
+            onBack={() => onNavigate('users')}
+            onCreated={(id, role) => {
+              onNavigate('users');
+              onSelectUser({ id, role });
+            }}
+            isDemoMode={isDemoMode}
+            callerRole={userRole}
+          />
+        );
+      case 'actledger':
+      case 'transactions':
+        return (
+          <ActLedgerPage
+            selectedUser={selectedUser}
+            onOpenUserPanel={onOpenUserPanel}
+            isDemoMode={isDemoMode}
+            forcedTab={activePage === 'transactions' ? 'transactions' : 'trade_logs'}
+          />
+        );
+      case 'accounts':
+        return <AccountsPage isDemoMode={isDemoMode} />;
+      case 'payinout':
+        return <PayinOutPage isDemoMode={isDemoMode} />;
+      case 'paymentaccounts':
+        return <PayAccountsPage />;
+      default:
+        return <MarketWatchPage />;
+    }
+  };
 
   return (
-    <>
-      <div style={show('telegram')}><TelegramPage /></div>
-      <div style={show('settings')}><SettingsPage /></div>
-      <div style={show('marketwatch')}><MarketWatchPage /></div>
-      <div style={show('dashboard')}><DashboardPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} /></div>
-      <div style={show('orders')}><OrdersPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} /></div>
-      <div style={show('position')}><PositionPage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} isDemoMode={isDemoMode} /></div>
-      <div style={show('update')}><UpdatePage selectedUser={selectedUser} onOpenUserPanel={onOpenUserPanel} /></div>
-      <div style={show('users')}><UsersPage selectedUser={selectedUser} onSelectUser={onSelectUser} onNavigate={onNavigate} isDemoMode={isDemoMode} /></div>
-      <div style={show('brokers')}><BrokersPage isDemoMode={isDemoMode} /></div>
-      <div style={show('admins')}><AdminsPage isDemoMode={isDemoMode} /></div>
-      <div style={show('templates')}><TemplatesPage isDemoMode={isDemoMode} /></div>
-      <div style={show('create')}>
-        <CreateUserForm
-          onBack={() => onNavigate('users')}
-          onCreated={(id, role) => {
-            onNavigate('users');
-            onSelectUser({ id, role });
-          }}
-          isDemoMode={isDemoMode}
-          callerRole={userRole}
-        />
-      </div>
-      <div style={{ display: (activePage === 'actledger' || activePage === 'transactions') ? undefined : 'none' }}>
-        <ActLedgerPage
-          selectedUser={selectedUser}
-          onOpenUserPanel={onOpenUserPanel}
-          isDemoMode={isDemoMode}
-          forcedTab={activePage === 'transactions' ? 'transactions' : 'trade_logs'}
-        />
-      </div>
-      <div style={show('accounts')}><AccountsPage isDemoMode={isDemoMode} /></div>
-      <div style={show('payinout')}><PayinOutPage isDemoMode={isDemoMode} /></div>
-      <div style={show('paymentaccounts')}><PayAccountsPage /></div>
-    </>
+    <AdminErrorBoundary tabName={activePage}>
+      {renderTab()}
+    </AdminErrorBoundary>
   );
 }

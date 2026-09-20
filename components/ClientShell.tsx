@@ -1,53 +1,23 @@
 'use client';
 
-import React, { useMemo } from 'react';
-import { usePathname } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
+import React from 'react';
 import AnimatedLoader from '@/components/AnimatedLoader';
 
 export default function ClientShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname() || '/';
-
-  const noShellRoutes = [
-    '/login',
-    '/register',
-    '/forgot-password',
-    '/reset-password',
-    '/accept-invite'
-  ];
-  
-  const isNoShellRoute = noShellRoutes.includes(pathname) || pathname.startsWith('/admin');
-
-  const activeTab = useMemo(() => {
-    if (pathname.includes('/watchlist')) return 'watchlist';
-    if (pathname.includes('/order')) return 'order';
-    if (pathname.includes('/position')) return 'position';
-    if (pathname.includes('/history')) return 'history';
-    if (pathname.includes('/profile')) return 'profile';
-    return 'home';
-  }, [pathname]);
-
   const [isGlobalLoading, setIsGlobalLoading] = React.useState(false);
-  const [loadingText, setLoadingText] = React.useState('Processing Order...');
+  const [loadingText, setLoadingText] = React.useState('Processing...');
 
-  // ── Global toast for async order errors ──────────────────────────────
+  // Global toast for notifications
   const [toastMsg, setToastMsg] = React.useState('');
   const [toastVisible, setToastVisible] = React.useState(false);
   const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     const onStart = (e: any) => {
-      setLoadingText(e.detail || 'Processing Order...');
+      setLoadingText(e.detail || 'Processing...');
       setIsGlobalLoading(true);
     };
     const onEnd = () => setIsGlobalLoading(false);
-
-    const onExitStart = () => {
-      setLoadingText('Exiting Position...');
-      setIsGlobalLoading(true);
-    };
-    const onExitEnd = () => setIsGlobalLoading(false);
 
     const onToast = (e: any) => {
       const msg = (e as CustomEvent).detail;
@@ -60,45 +30,31 @@ export default function ClientShell({ children }: { children: React.ReactNode })
 
     window.addEventListener('global-loader-start', onStart);
     window.addEventListener('global-loader-end', onEnd);
-    window.addEventListener('exit-overlay-start', onExitStart);
-    window.addEventListener('exit-overlay-end', onExitEnd);
     window.addEventListener('toast_msg', onToast);
     return () => {
       window.removeEventListener('global-loader-start', onStart);
       window.removeEventListener('global-loader-end', onEnd);
-      window.removeEventListener('exit-overlay-start', onExitStart);
-      window.removeEventListener('exit-overlay-end', onExitEnd);
       window.removeEventListener('toast_msg', onToast);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, []);
 
-  if (isNoShellRoute) {
-    return <>{children}</>;
-  }
-
   return (
-    <div className="desktop-layout">
+    <>
       {isGlobalLoading && (
         <AnimatedLoader fullScreen={true} text={loadingText} />
       )}
-      <Sidebar />
-      <main className="main-viewport">
-        <div className="app-container">
-          {children}
-        </div>
-        <Footer activeTab={activeTab as any} />
-      </main>
+      {children}
 
-      {/* Global toast for async order failure messages */}
+      {/* Global toast */}
       <div
         className={`global-toast${toastVisible ? ' show' : ''}`}
         style={{
           position: 'fixed',
-          bottom: 90,
+          bottom: 40,
           left: '50%',
           transform: `translateX(-50%) translateY(${toastVisible ? 0 : 20}px)`,
-          background: '#B91C1C',
+          background: '#1F2937',
           color: '#fff',
           padding: '10px 22px',
           borderRadius: 30,
@@ -112,11 +68,11 @@ export default function ClientShell({ children }: { children: React.ReactNode })
           maxWidth: '90vw',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
-          boxShadow: '0 4px 16px rgba(185,28,28,0.4)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
         }}
       >
         {toastMsg}
       </div>
-    </div>
+    </>
   );
 }

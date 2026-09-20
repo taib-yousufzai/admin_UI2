@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { signIn, getSession, getRole } from '@/lib/auth';
-import RiskRulesPopup from '@/components/RiskRulesPopup';
 import AnimatedLoader from '@/components/AnimatedLoader';
 import './page.css';
 
@@ -284,15 +283,6 @@ export default function LoginPage() {
           Create your account
         </a>
       </div>
-
-      {/* Popups */}
-      {showPopups && (
-        <RiskRulesPopup
-          onAccept={() => {
-            if (pendingRoute) router.replace(pendingRoute);
-          }}
-        />
-      )}
     </div>
   );
 }

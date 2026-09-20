@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import Sidebar from '@/components/Sidebar';
-import Footer from '@/components/Footer';
 import { useAuth } from '@/hooks/useAuth';
 import { api, ApiError } from '@/lib/api';
 import './diagnostics.css';
@@ -451,7 +450,6 @@ export default function DiagnosticsPage() {
             </div>
           </div>
         ) : null}
-        <Footer activeTab="profile" />
       </main>
     </div>
   );

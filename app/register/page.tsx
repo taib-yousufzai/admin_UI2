@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { api, ApiError } from '@/lib/api';
-import RiskRulesPopup from '@/components/RiskRulesPopup';
 import '../login/page.css';
 
 // ─── OTP Input component — 6 auto-advance boxes ───────────────────────────────

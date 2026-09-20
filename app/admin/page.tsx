@@ -30,11 +30,13 @@ import UserPanel from '@/components/admin/UserPanel';
 import TemplatesPage from '@/components/admin/TemplatesPage';
 import BrokersPage from '@/components/admin/BrokersPage';
 import AdminsPage from '@/components/admin/AdminsPage';
-import { AdminErrorBoundary, clearAdminAuthCache } from '@/components/admin/AdminUtils';
+import { AdminErrorBoundary, clearAdminAuthCache, Toast, ToastState } from '@/components/admin/AdminUtils';
+import AdminRiskBar from '@/components/admin/AdminRiskBar';
 // We will now group the navigation items directly in the render function.
 
 export default function AdminPage() {
   const router = useRouter();
+  const [toast, setToast] = useState<ToastState>(null);
   const [isChecking, setIsChecking] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userPanelOpen, setUserPanelOpen] = useState(false);
@@ -232,19 +234,27 @@ export default function AdminPage() {
       />
 
       <div className="adm-main-area">
-        <div className="adm-topbar">
-          <button className="adm-hamburger" onClick={() => setDrawerOpen(true)}>
-            <span /><span /><span />
-          </button>
-          <KiteConnectButton />
-          {(activePage === 'settings' || activePage === 'dashboard' || activePage === 'orders' || activePage === 'position' || activePage === 'update') && (
-            <button className="adm-hamburger-right" onClick={() => setUserPanelOpen(true)}>
+        <Toast toast={toast} onDismiss={() => setToast(null)} />
+        <div className="adm-topbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button className="adm-hamburger" onClick={() => setDrawerOpen(true)}>
               <span /><span /><span />
+            </button>
+            <KiteConnectButton />
+          </div>
+
+          <div style={{ flex: 1, maxWidth: '800px', display: 'flex', justifyContent: 'flex-end' }}>
+            <AdminRiskBar isDemoMode={isDemoMode} onTriggerToast={(t) => setToast(t)} />
+          </div>
+
+          {(activePage === 'settings' || activePage === 'dashboard' || activePage === 'orders' || activePage === 'position' || activePage === 'update') && (
+            <button className="adm-hamburger-right" onClick={() => setUserPanelOpen(true)} title="Quick User Switcher">
+              <i className="fas fa-user-circle" style={{ fontSize: '18px', color: '#8b949e' }}></i>
             </button>
           )}
         </div>
 
-    <div className="adm-content">
+        <div className="adm-content">
           <PageContent
             activePage={activePage}
             selectedUser={selectedUser}

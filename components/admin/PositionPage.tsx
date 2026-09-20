@@ -44,6 +44,27 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
   const [collapsedUsers, setCollapsedUsers] = useState<Record<string, boolean>>({});
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Multi-select bulk state
+  const [selectedPosIds, setSelectedPosIds] = useState<Set<string>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
+
+  const toggleSelectPosition = (id: string) => {
+    setSelectedPosIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedPosIds.size === displayed.length) {
+      setSelectedPosIds(new Set());
+    } else {
+      setSelectedPosIds(new Set(displayed.map(p => p.id)));
+    }
+  };
+
   const exportRef = useRef<HTMLDivElement>(null);
   const uid = selectedUser.id;
   const isGlobal = viewMode === 'global';
@@ -241,16 +262,47 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
       .catch((err: unknown) => setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' }));
   };
 
-  const handleReopen = (pos: Position) => {
-    apiCall(`/api/admin/positions/${pos.id}/reopen`, { method: 'POST' })
-      .then(({ ok, status }) => {
-        if (status === 401) { signOut(); return; }
-        if (status === 403) { setToast({ message: 'Access Denied', type: 'error' }); return; }
-        if (!ok) { setToast({ message: 'Server Error', type: 'error' }); return; }
-        setToast({ message: 'Position reopened successfully', type: 'success' });
-        fetchPositions();
-      })
-      .catch((err: unknown) => setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' }));
+  const handleBulkSqoff = async () => {
+    if (selectedPosIds.size === 0) return;
+    setBulkLoading(true);
+    let successCount = 0;
+    const ids = Array.from(selectedPosIds);
+    for (const id of ids) {
+      try {
+        const { ok } = await apiCall(`/api/admin/positions/${id}/sqoff`, { method: 'POST' });
+        if (ok) successCount++;
+      } catch {
+        // continue with other positions
+      }
+    }
+    setBulkLoading(false);
+    setSelectedPosIds(new Set());
+    setToast({ message: `Successfully squared off ${successCount} of ${ids.length} positions`, type: 'success' });
+    fetchPositions();
+  };
+
+  const handleBulkExport = () => {
+    const selectedPositions = filtered.filter(p => selectedPosIds.has(p.id));
+    if (selectedPositions.length === 0) return;
+    const headers = ['Symbol', 'User', 'Side', 'Status', 'Qty', 'Avg Price', 'LTP/Exit', 'P&L'];
+    const rows = selectedPositions.map(p => [
+      p.symbol,
+      p.user_name || p.user_id,
+      p.side,
+      p.status,
+      p.qty,
+      p.avgPrice.toFixed(2),
+      p.status === 'closed' ? (p.exit || 0).toFixed(2) : (p.ltp || 0).toFixed(2),
+      (p.pnl || 0).toFixed(2)
+    ]);
+    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `selected-positions-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleDelete = () => {
@@ -636,8 +688,79 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
                 onDelete={id => setConfirmDeleteId(id)} 
                 onSqoff={handleSqoff} 
                 onReopen={handleReopen} 
+                selectedIds={selectedPosIds}
+                onToggleSelect={toggleSelectPosition}
+                onToggleSelectAll={toggleSelectAll}
               />
             </div>
+          </div>
+        )}
+
+        {/* Floating Bulk Action Toolbar */}
+        {selectedPosIds.size > 0 && (
+          <div style={{
+            position: 'fixed',
+            bottom: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#161b22',
+            border: '1px solid #30363d',
+            borderRadius: '10px',
+            padding: '10px 18px',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '14px',
+            zIndex: 900,
+            backdropFilter: 'blur(8px)',
+          }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#e6edf3' }}>
+              <span style={{ color: '#58a6ff', fontWeight: 700 }}>{selectedPosIds.size}</span> Positions Selected
+            </span>
+            <button
+              onClick={handleBulkSqoff}
+              disabled={bulkLoading}
+              style={{
+                padding: '6px 14px',
+                background: '#da3633',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {bulkLoading ? 'Squaring Off...' : 'Bulk Square Off'}
+            </button>
+            <button
+              onClick={handleBulkExport}
+              style={{
+                padding: '6px 14px',
+                background: '#21262d',
+                color: '#c9d1d9',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              Export Selected
+            </button>
+            <button
+              onClick={() => setSelectedPosIds(new Set())}
+              style={{
+                padding: '6px 10px',
+                background: 'transparent',
+                color: '#8b949e',
+                border: 'none',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              ✕ Clear
+            </button>
           </div>
         )}
 
@@ -662,19 +785,34 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
 
 // ─── Position Table Subcomponent ──────────────────────────────────────────────
 
-function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReopen }: { 
+function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReopen, selectedIds, onToggleSelect, onToggleSelectAll }: { 
   positions: Position[]; 
   showUser: boolean; 
   onEdit: (p: Position) => void;
   onDelete: (id: string) => void;
   onSqoff: (id: string) => void;
   onReopen: (p: Position) => void;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onToggleSelectAll?: () => void;
 }) {
+  const allSelected = positions.length > 0 && selectedIds && positions.every(p => selectedIds.has(p.id));
+
   return (
     <div className="pos-table-wrap">
       <table className="pos-table">
         <thead>
           <tr>
+            {onToggleSelect && (
+              <th style={{ width: '36px', textAlign: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={!!allSelected}
+                  onChange={onToggleSelectAll}
+                  style={{ accentColor: '#2563eb', cursor: 'pointer' }}
+                />
+              </th>
+            )}
             <th>P&amp;L</th>
             <th>Symbol</th>
             {showUser && <th>User</th>}
@@ -689,8 +827,19 @@ function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReope
         <tbody>
           {positions.map(p => {
             const pnl = p.pnl || 0;
+            const isSelected = selectedIds?.has(p.id);
             return (
-              <tr key={p.id}>
+              <tr key={p.id} style={{ background: isSelected ? 'rgba(56, 139, 253, 0.08)' : undefined }}>
+                {onToggleSelect && (
+                  <td style={{ textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!isSelected}
+                      onChange={() => onToggleSelect(p.id)}
+                      style={{ accentColor: '#2563eb', cursor: 'pointer' }}
+                    />
+                  </td>
+                )}
                 <td data-label="P&L">
                   <span className={`pos-pl-val ${pnl >= 0 ? 'pos-green' : 'pos-red'}`}>
                     ₹{pnl.toFixed(2)}
@@ -741,3 +890,4 @@ function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReope
     </div>
   );
 }
+

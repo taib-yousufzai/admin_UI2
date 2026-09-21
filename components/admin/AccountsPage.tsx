@@ -49,8 +49,8 @@ export default function AccountsPage({ isDemoMode }: { isDemoMode: boolean }) {
   useEffect(() => {
     fetchAccounts();
     const interval = setInterval(() => {
-      fetchAccounts(true); // silent refresh every second
-    }, 1000);
+      fetchAccounts(true); // silent refresh every 5 seconds
+    }, 5000);
     return () => clearInterval(interval);
   }, [filter, dateFrom, dateTo, search, isDemoMode]);
 

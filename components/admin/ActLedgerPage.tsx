@@ -412,7 +412,7 @@ export default function ActLedgerPage({ selectedUser, onOpenUserPanel, isDemoMod
       .catch((err: unknown) => {
         setToast({ message: err instanceof Error ? err.message : 'Network error', type: 'error' });
       });
-  }, [dateFrom, dateTo, search, page, pageSize, viewMode, uid]);
+  }, [dateFrom, dateTo, search, page, pageSize, viewMode, uid, isDemoMode]);
 
   const handleSaveEdit = async (id: string, form: EditFormState) => {
     setSaving(true);

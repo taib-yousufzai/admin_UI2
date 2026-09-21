@@ -66,7 +66,7 @@ export default function OrdersPage({ selectedUser, onOpenUserPanel, isDemoMode }
   isDemoMode: boolean;
 }) {
   const [tab, setTab] = useState<TabKey>('executed');
-  const [viewMode, setViewMode] = useState<ViewMode>('user');
+  const [viewMode, setViewMode] = useState<ViewMode>(selectedUser?.id ? 'user' : 'global');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState('50');
   const [page, setPage] = useState(1);
@@ -87,8 +87,14 @@ export default function OrdersPage({ selectedUser, onOpenUserPanel, isDemoMode }
   const [collapsedUsers, setCollapsedUsers] = useState<Record<string, boolean>>({});
   const exportRef = useRef<HTMLDivElement>(null);
 
-  const uid = selectedUser.id;
-  const isGlobal = viewMode === 'global';
+  const uid = selectedUser?.id;
+  const isGlobal = viewMode === 'global' || !uid;
+
+  useEffect(() => {
+    if (selectedUser?.id) {
+      setViewMode('user');
+    }
+  }, [selectedUser?.id]);
 
   // Close export dropdown on outside click
   useEffect(() => {
@@ -112,7 +118,7 @@ export default function OrdersPage({ selectedUser, onOpenUserPanel, isDemoMode }
     const query = `tab=${encodeURIComponent(tab)}&rows=${rows}&page=${page}${dateFrom ? `&dateFrom=${dateFrom}` : ''}${dateTo ? `&dateTo=${dateTo}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}&demo=${String(isDemoMode)}`;
     const endpoint = isGlobal
       ? `/api/admin/orders?${query}`
-      : uid ? `/api/admin/users/${uid}/orders?${query}` : null;
+      : uid ? `/api/admin/users/${uid}/orders?${query}` : `/api/admin/orders?${query}`;
     if (!endpoint) return;
 
     setLoading(true);

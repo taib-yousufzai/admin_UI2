@@ -126,8 +126,8 @@ export default function DashboardPage({ selectedUser, onOpenUserPanel, isDemoMod
   }, [dateFrom, dateTo, brokerId, subBrokerId, clientId, isDemoMode]);
 
   useEffect(() => {
-    setTimeout(() => fetchMetrics(), 0);
-    const interval = setInterval(() => fetchMetrics(false, true), 1000);
+    fetchMetrics();
+    const interval = setInterval(() => fetchMetrics(false, true), 5000);
     return () => clearInterval(interval);
   }, [fetchMetrics]);
 

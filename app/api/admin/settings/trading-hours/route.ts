@@ -56,13 +56,37 @@ export async function PUT(request: Request) {
       .from('trading_hours')
       .upsert(upsertData, { onConflict: 'id' });
 
-    if (error) {
-      console.error('[PUT trading-hours] Error:', error.message);
-      return Response.json({ error: 'Failed to update trading hours' }, { status: 500 });
-    }
-
     return Response.json({ success: true }, { status: 200 });
   } catch {
     return Response.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const authResult = await requireAdmin(request);
+    if (authResult instanceof Response) return authResult;
+    const { adminClient } = authResult;
+
+    const body = await request.json().catch(() => ({}));
+    if (body.global_trading_lock) {
+      // Set all trading hours segments to inactive
+      await adminClient
+        .from('trading_hours')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .neq('id', 'non_existing_id');
+
+      // Also set platform-wide kill switch if platform_settings exists
+      try {
+        const { setPlatformSetting } = await import('@/lib/getPlatformSetting');
+        await setPlatformSetting('GLOBAL_KILL_SWITCH', 'true');
+      } catch {}
+
+      return Response.json({ success: true, message: 'Global trading locked' }, { status: 200 });
+    }
+
+    return Response.json({ error: 'Invalid request' }, { status: 400 });
+  } catch (err: any) {
+    return Response.json({ error: err?.message || 'Internal server error' }, { status: 500 });
   }
 }

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useState } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 import { SegmentSettingsType } from './UpdateSegments';
@@ -44,27 +44,23 @@ export default function UpdateMultipleSettings({ selectedUser: _selectedUser }: 
     }
 
     setLoading(true);
-    // Simulated API Call
     try {
-      const { ok } = await apiCall(`/api/admin/users/bulk-segments`, {
+      const { ok, data } = await apiCall(`/api/admin/users/bulk-segments`, {
         method: 'POST',
-        body: JSON.stringify({ broker: targetBroker, segments: segmentsToUpdate, config }),
+        body: JSON.stringify({ broker: targetBroker.trim(), segments: segmentsToUpdate, config }),
       });
       
+      setLoading(false);
       if (!ok) {
-        setTimeout(() => {
-          setLoading(false);
-          setToast({ message: `Successfully updated ${segmentsToUpdate.length} segments for users under ${targetBroker}`, type: 'success' });
-          setSegmentsToUpdate([]);
-        }, 800);
+        setToast({ message: (data as any)?.error || 'Failed to apply bulk settings', type: 'error' });
         return;
       }
       
+      setToast({ message: `Successfully updated ${segmentsToUpdate.length} segment(s) for users under ${targetBroker}`, type: 'success' });
+      setSegmentsToUpdate([]);
+    } catch (e: any) {
       setLoading(false);
-      setToast({ message: 'Bulk update applied successfully', type: 'success' });
-    } catch (e) {
-      setLoading(false);
-      setToast({ message: 'Simulated API call for UI', type: 'success' });
+      setToast({ message: e?.message || 'Network error applying bulk settings', type: 'error' });
     }
   };
 

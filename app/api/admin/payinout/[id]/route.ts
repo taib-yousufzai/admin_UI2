@@ -7,9 +7,12 @@
 
 import { requireAdmin } from '../../_auth';
 
-// ---------------------------------------------------------------------------
-// PATCH handler — approve or reject
-// ---------------------------------------------------------------------------
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ id: string }> | { id: string } }
+): Promise<Response> {
+  return PATCH(request, context);
+}
 
 export async function PATCH(
   request: Request,

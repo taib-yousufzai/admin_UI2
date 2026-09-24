@@ -99,7 +99,10 @@ export default function PayinOutPage({ isDemoMode }: { isDemoMode: boolean }) {
 
   const handleAccept = async (r: PayRequest) => {
     setActionLoading(p => ({ ...p, [r.id]: true }));
-    const { ok, status: httpStatus, data } = await apiCall(`/api/admin/payinout/${r.id}/approve`, { method: 'POST' });
+    const { ok, status: httpStatus, data } = await apiCall(`/api/admin/payinout/${r.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'approve' }),
+    });
     if (httpStatus === 401) { signOut(); return; }
     if (!ok) setToast({ message: (data as any)?.error ?? 'Failed to approve', type: 'error' });
     else { setToast({ message: 'Request approved', type: 'success' }); setRefreshKey(p => p + 1); }
@@ -108,10 +111,25 @@ export default function PayinOutPage({ isDemoMode }: { isDemoMode: boolean }) {
 
   const handleReject = async (r: PayRequest) => {
     setActionLoading(p => ({ ...p, [r.id]: true }));
-    const { ok, status: httpStatus, data } = await apiCall(`/api/admin/payinout/${r.id}/reject`, { method: 'POST' });
+    const { ok, status: httpStatus, data } = await apiCall(`/api/admin/payinout/${r.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'reject' }),
+    });
     if (httpStatus === 401) { signOut(); return; }
     if (!ok) setToast({ message: (data as any)?.error ?? 'Failed to reject', type: 'error' });
     else { setToast({ message: 'Request rejected', type: 'success' }); setRefreshKey(p => p + 1); }
+    setActionLoading(p => ({ ...p, [r.id]: false }));
+  };
+
+  const handleDelete = async (r: PayRequest) => {
+    if (!window.confirm(`Are you sure you want to delete this ${r.type.toLowerCase()} request for ₹${r.amount.toLocaleString()}?`)) return;
+    setActionLoading(p => ({ ...p, [r.id]: true }));
+    const { ok, status: httpStatus, data } = await apiCall(`/api/admin/payinout/${r.id}`, {
+      method: 'DELETE',
+    });
+    if (httpStatus === 401) { signOut(); return; }
+    if (!ok) setToast({ message: (data as any)?.error ?? 'Failed to delete', type: 'error' });
+    else { setToast({ message: 'Request deleted successfully', type: 'success' }); setRefreshKey(p => p + 1); }
     setActionLoading(p => ({ ...p, [r.id]: false }));
   };
 
@@ -329,7 +347,7 @@ export default function PayinOutPage({ isDemoMode }: { isDemoMode: boolean }) {
                           </button>
                         </td>
                         <td style={{ textAlign: 'center' }}>
-                          <button className="pio-delete-btn" title="Delete" onClick={() => setToast({ message: 'Delete not implemented', type: 'error' })}>✕</button>
+                          <button className="pio-delete-btn" title="Delete" disabled={!!actionLoading[r.id]} onClick={() => handleDelete(r)}>✕</button>
                         </td>
                       </tr>
                     );

@@ -1,6 +1,6 @@
 'use client';
-import React, { useState } from 'react';
-import { Toast, ToastState } from '../AdminUtils';
+import React, { useState, useEffect } from 'react';
+import { apiCall, Toast, ToastState } from '../AdminUtils';
 
 export default function SettingsApp() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
@@ -8,15 +8,52 @@ export default function SettingsApp() {
   const [allowNewRegistrations, setAllowNewRegistrations] = useState(true);
   
   const [toast, setToast] = useState<ToastState>(null);
+  const [loading, setLoading] = useState(true);
   const [saveLoading, setSaveLoading] = useState(false);
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    setLoading(true);
+    try {
+      const { ok, data } = await apiCall('/api/admin/platform-settings', { method: 'GET' });
+      if (ok && (data as any)?.settings) {
+        const s = (data as any).settings;
+        setMaintenanceMode(s.MAINTENANCE_MODE === 'true');
+        setGlobalKillSwitch(s.GLOBAL_KILL_SWITCH === 'true');
+        setAllowNewRegistrations(s.ALLOW_REGISTRATIONS !== 'false');
+      }
+    } catch (e: any) {
+      setToast({ message: 'Failed to load app settings', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSave = async () => {
     setSaveLoading(true);
-    // TODO: Implement actual API call to save app settings
-    setTimeout(() => {
-      setToast({ message: 'App settings saved successfully', type: 'success' });
+    try {
+      const { ok, data } = await apiCall('/api/admin/platform-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          MAINTENANCE_MODE: String(maintenanceMode),
+          GLOBAL_KILL_SWITCH: String(globalKillSwitch),
+          ALLOW_REGISTRATIONS: String(allowNewRegistrations),
+        }),
+      });
+
+      if (!ok) {
+        setToast({ message: (data as any)?.error || 'Failed to save settings', type: 'error' });
+      } else {
+        setToast({ message: 'Platform settings saved successfully!', type: 'success' });
+      }
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Network error saving settings', type: 'error' });
+    } finally {
       setSaveLoading(false);
-    }, 800);
+    }
   };
 
   return (
@@ -33,61 +70,65 @@ export default function SettingsApp() {
       <div className="adm-card" style={{ maxWidth: 600, padding: 24 }}>
         <h3 style={{ marginTop: 0, marginBottom: 24, color: '#e6edf3', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #30363d' }}>Global Toggles</h3>
         
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {/* Maintenance Mode */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Maintenance Mode</div>
-              <div style={{ color: '#8b949e', fontSize: '13px' }}>Shows a maintenance page to all users. Admins can still log in.</div>
+        {loading ? (
+          <div style={{ color: '#8b949e', padding: '16px 0' }}>Loading settings...</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {/* Maintenance Mode */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Maintenance Mode</div>
+                <div style={{ color: '#8b949e', fontSize: '13px' }}>Shows a maintenance page to all users. Admins can still log in.</div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                <input 
+                  type="checkbox" 
+                  checked={maintenanceMode} 
+                  onChange={(e) => setMaintenanceMode(e.target.checked)}
+                  style={{ accentColor: '#10b981', width: '20px', height: '20px' }}
+                />
+              </label>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input 
-                type="checkbox" 
-                checked={maintenanceMode} 
-                onChange={(e) => setMaintenanceMode(e.target.checked)}
-                style={{ accentColor: '#10b981', width: '20px', height: '20px' }}
-              />
-            </label>
-          </div>
 
-          {/* Global Kill Switch */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 'bold', color: '#f43f5e', marginBottom: 4 }}>Global Trading Kill Switch</div>
-              <div style={{ color: '#8b949e', fontSize: '13px' }}>Emergency! Instantly disables all new order placement across the entire platform.</div>
+            {/* Global Kill Switch */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 'bold', color: '#f43f5e', marginBottom: 4 }}>Global Trading Kill Switch</div>
+                <div style={{ color: '#8b949e', fontSize: '13px' }}>Emergency! Instantly disables all new order placement across the entire platform.</div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                <input 
+                  type="checkbox" 
+                  checked={globalKillSwitch} 
+                  onChange={(e) => setGlobalKillSwitch(e.target.checked)}
+                  style={{ accentColor: '#f43f5e', width: '20px', height: '20px' }}
+                />
+              </label>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input 
-                type="checkbox" 
-                checked={globalKillSwitch} 
-                onChange={(e) => setGlobalKillSwitch(e.target.checked)}
-                style={{ accentColor: '#f43f5e', width: '20px', height: '20px' }}
-              />
-            </label>
-          </div>
 
-          {/* Allow Registrations */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Allow New Registrations</div>
-              <div style={{ color: '#8b949e', fontSize: '13px' }}>Controls whether new users can sign up via the public registration page.</div>
+            {/* Allow Registrations */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Allow New Registrations</div>
+                <div style={{ color: '#8b949e', fontSize: '13px' }}>Controls whether new users can sign up via the public registration page.</div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                <input 
+                  type="checkbox" 
+                  checked={allowNewRegistrations} 
+                  onChange={(e) => setAllowNewRegistrations(e.target.checked)}
+                  style={{ accentColor: '#10b981', width: '20px', height: '20px' }}
+                />
+              </label>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input 
-                type="checkbox" 
-                checked={allowNewRegistrations} 
-                onChange={(e) => setAllowNewRegistrations(e.target.checked)}
-                style={{ accentColor: '#10b981', width: '20px', height: '20px' }}
-              />
-            </label>
           </div>
-        </div>
+        )}
         
         <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid #30363d' }}>
           <button 
             className="adm-btn-primary" 
             onClick={handleSave} 
-            disabled={saveLoading}
+            disabled={saveLoading || loading}
           >
             {saveLoading ? 'Saving...' : 'Save App Settings'}
           </button>

@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useState } from 'react';
 import { apiCall, Toast, ToastState } from '../AdminUtils';
 
@@ -38,28 +38,24 @@ export default function UpdateCopySettings({ selectedUser }: { selectedUser?: { 
     }
 
     setLoading(true);
-    // Note: API endpoint for copying settings doesn't exist yet.
-    // Simulating API call for UI
     try {
-      const { ok } = await apiCall(`/api/admin/users/copy-settings`, {
+      const res = await apiCall(`/api/admin/users/copy-settings`, {
         method: 'POST',
-        body: JSON.stringify({ source: sourceUid, target: targetUid, segments: segmentsToCopy }),
+        body: JSON.stringify({ source: sourceUid.trim(), target: targetUid.trim(), segments: segmentsToCopy }),
       });
       
-      if (!ok) {
-        setTimeout(() => {
-          setLoading(false);
-          setToast({ message: `Successfully copied ${segmentsToCopy.length} segments from ${sourceUid} to ${targetUid}`, type: 'success' });
-          setSourceUid('');
-        }, 500);
+      if (!res.ok) {
+        setLoading(false);
+        setToast({ message: (res.data as any)?.error || 'Failed to copy settings', type: 'error' });
         return;
       }
       
       setLoading(false);
-      setToast({ message: 'Settings copied successfully', type: 'success' });
-    } catch (e) {
+      setToast({ message: (res.data as any)?.message || 'Settings copied successfully', type: 'success' });
+      setSourceUid('');
+    } catch (e: any) {
       setLoading(false);
-      setToast({ message: 'Simulated API call for UI', type: 'success' });
+      setToast({ message: e?.message || 'Error copying settings', type: 'error' });
     }
   };
 

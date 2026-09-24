@@ -1,24 +1,54 @@
 'use client';
-import React, { useState } from 'react';
-import { Toast, ToastState } from '../AdminUtils';
+import React, { useState, useEffect } from 'react';
+import { apiCall, Toast, ToastState } from '../AdminUtils';
 
 export default function SettingsCurrency() {
   const [exchangeRate, setExchangeRate] = useState('83.50');
   const [toast, setToast] = useState<ToastState>(null);
+  const [loading, setLoading] = useState(true);
   const [saveLoading, setSaveLoading] = useState(false);
 
+  useEffect(() => {
+    fetchRate();
+  }, []);
+
+  const fetchRate = async () => {
+    setLoading(true);
+    try {
+      const { ok, data } = await apiCall('/api/admin/platform-settings', { method: 'GET' });
+      if (ok && (data as any)?.settings?.USD_INR_RATE) {
+        setExchangeRate((data as any).settings.USD_INR_RATE);
+      }
+    } catch (e: any) {
+      setToast({ message: 'Failed to load exchange rate', type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSave = async () => {
-    if (!exchangeRate || isNaN(Number(exchangeRate))) {
-      setToast({ message: 'Please enter a valid number', type: 'error' });
+    if (!exchangeRate || isNaN(Number(exchangeRate)) || Number(exchangeRate) <= 0) {
+      setToast({ message: 'Please enter a valid positive number', type: 'error' });
       return;
     }
     
     setSaveLoading(true);
-    // TODO: Implement actual API call to save currency settings
-    setTimeout(() => {
-      setToast({ message: 'Currency settings saved successfully', type: 'success' });
+    try {
+      const { ok, data } = await apiCall('/api/admin/platform-settings', {
+        method: 'PUT',
+        body: JSON.stringify({ USD_INR_RATE: exchangeRate.trim() }),
+      });
+
+      if (!ok) {
+        setToast({ message: (data as any)?.error || 'Failed to save exchange rate', type: 'error' });
+      } else {
+        setToast({ message: 'Exchange rate saved successfully', type: 'success' });
+      }
+    } catch (e: any) {
+      setToast({ message: e?.message || 'Network error saving rate', type: 'error' });
+    } finally {
       setSaveLoading(false);
-    }, 800);
+    }
   };
 
   return (
@@ -46,6 +76,7 @@ export default function SettingsCurrency() {
               onChange={e => setExchangeRate(e.target.value)}
               placeholder="83.50"
               step="0.01"
+              disabled={loading}
               style={{ maxWidth: 200 }}
             />
           </div>
@@ -58,7 +89,7 @@ export default function SettingsCurrency() {
           <button 
             className="adm-btn-primary" 
             onClick={handleSave} 
-            disabled={saveLoading}
+            disabled={saveLoading || loading}
           >
             {saveLoading ? 'Saving...' : 'Save Exchange Rate'}
           </button>

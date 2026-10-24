@@ -1,28 +1,37 @@
-FROM node:20-alpine AS base
-
+# syntax=docker/dockerfile:1
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Install dependencies
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy full source
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build Next.js production bundle
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+RUN mkdir -p /app/public
 RUN npm run build
 
 # Production image — only runtime artifacts
 FROM node:20-alpine AS runner
 WORKDIR /app
+
 ENV NODE_ENV=production
-
-COPY --from=base /app/public ./public
-COPY --from=base /app/.next/standalone ./
-COPY --from=base /app/.next/static ./.next/static
-
-EXPOSE 3000
-ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=8008
 ENV HOSTNAME="0.0.0.0"
+
+RUN apk add --no-cache libc6-compat
+
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+EXPOSE 8008
 
 CMD ["node", "server.js"]

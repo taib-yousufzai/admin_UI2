@@ -1,3 +1,4 @@
+import path from "path";
 import type { NextConfig } from "next";
 import withSerwistInit from "@serwist/next";
 
@@ -9,6 +10,7 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   output: 'standalone', // enables minimal Docker image via Dockerfile.nextjs
+  outputFileTracingRoot: path.join(__dirname),
   typescript: {
     ignoreBuildErrors: true,
   },

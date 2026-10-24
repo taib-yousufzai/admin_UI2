@@ -859,8 +859,9 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
       showToast("Invalid quantity", true);
       return;
     }
-    const finalQty = useLots ? (isCrypto ? qVal * lotSize : Math.round(qVal * lotSize)) : (isCrypto ? qVal : Math.round(qVal));
-    const finalLots = useLots ? qVal : (finalQty / lotSize);
+    const targetLotSize = ((isAddMoreFlow || isExitFlow) && addMoreSymbol) ? getLotSize(addMoreSymbol) : (chainContract ? getLotSize(chainContract.name) : lotSize);
+    const finalQty = useLots ? (isCrypto ? qVal * targetLotSize : Math.round(qVal * targetLotSize)) : (isCrypto ? qVal : Math.round(qVal));
+    const finalLots = useLots ? qVal : (finalQty / targetLotSize);
 
     // Determine the base execution price
     // For add-more/exit flow on a different instrument, use that position's LTP not the chart price
@@ -902,7 +903,7 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     const holdingType = segSetting?.holding_type ?? 'Multiplier';
     const levType = orderCarry === 'carry' ? holdingType : intradayType;
 
-    const reqMargin = Math.round(levType === '%' ? (finalPrice * finalQty) * (leverage / 100) : (levType === 'Fixed' ? (finalQty / lotSize) * leverage : (finalPrice * finalQty) / leverage));
+    const reqMargin = Math.round(levType === '%' ? (finalPrice * finalQty) * (leverage / 100) : (levType === 'Fixed' ? (finalQty / targetLotSize) * leverage : (finalPrice * finalQty) / leverage));
     if (reqMargin > balance) {
       showToast('Insufficient margin', true);
       return;
@@ -1164,8 +1165,10 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     setAddMoreLtp(pos.current_ltp || pos.avg_price || pos.entry_price);
     setAddMoreKiteInst(pos.kite_instrument || pos.symbol);
     setOrderSide(pos.side);
-    setQtyValue(pos.qty_open);
-    setUseLots(false);
+    const posSeg = (pos.settlement || segment || '').toUpperCase();
+    const isQtyDefault = posSeg.includes('EQUITY') || posSeg === 'NSE-EQ' || posSeg.includes('CRYPTO');
+    setUseLots(!isQtyDefault);
+    setQtyValue(1);
     setOrderCarry(pos.product_type === 'CARRY' ? 'carry' : 'normal');
     setOrderType('market');
     
@@ -1333,7 +1336,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     if (quickEntryLock.current) return;
     quickEntryLock.current = true;
 
-    const addQty = pos.qty_open;
+    const posLotSize = getLotSize(pos.symbol || symbol);
+    const addQty = posLotSize > 0 ? posLotSize : 1;
     const dbSeg = mapSegmentToDbSegment(segment);
     const segSetting = getSegment(dbSeg, pos.side);
     const leverage = pos.product_type === 'CARRY' ? (segSetting?.holding_leverage ?? 10) : (segSetting?.intraday_leverage ?? 10);
@@ -1467,7 +1471,8 @@ export default function TradingChart({ symbol: propSymbol, segment: propSegment 
     ? (orderSide === 'SELL' ? chainContract.bid : chainContract.ask)
     : underlyingPriceOfScript;
 
-  const orderQty = useLots ? (parseFloat(String(qtyValue)) || 0) * lotSize : (parseFloat(String(qtyValue)) || 0);
+  const effectiveLotSize = ((isAddMoreFlow || isExitFlow) && addMoreSymbol) ? getLotSize(addMoreSymbol) : (chainContract ? getLotSize(chainContract.name) : lotSize);
+  const orderQty = useLots ? (parseFloat(String(qtyValue)) || 0) * effectiveLotSize : (parseFloat(String(qtyValue)) || 0);
   // Fall back to currentPrice if activeLiveQuote bid/ask is missing or zero
   const resolvedPrice = priceOfScript > 0 ? priceOfScript : currentPrice;
   const executionPrice = orderType === 'limit'

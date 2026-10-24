@@ -108,13 +108,13 @@ export function SegmentBlock({
             <div
               style={{
                 position: 'absolute', right: 0, top: 'calc(100% + 5px)',
-                background: '#161b22', border: '1px solid #30363d', borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.5)', zIndex: 10,
+                background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 8,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.08)', zIndex: 10,
                 minWidth: 160, maxHeight: 200, overflowY: 'auto', padding: '6px 0',
               }}
               onMouseLeave={() => setShowCopyDropdown(false)}
             >
-              <div style={{ padding: '6px 12px', fontSize: 11, color: '#8b949e', borderBottom: '1px solid #30363d', fontWeight: 600 }}>
+              <div style={{ padding: '6px 12px', fontSize: 11, color: '#64748b', borderBottom: '1px solid #e2e8f0', fontWeight: 600 }}>
                 Select Segment
               </div>
               {availableBlocks.filter(b => b !== name).map(b => (
@@ -123,9 +123,9 @@ export function SegmentBlock({
                   onClick={() => { onPerformCopy(b); setShowCopyDropdown(false); }}
                   style={{
                     width: '100%', padding: '8px 12px', background: 'transparent', border: 'none',
-                    color: '#c9d1d9', textAlign: 'left', fontSize: 12, cursor: 'pointer',
+                    color: '#0f172a', textAlign: 'left', fontSize: 12, cursor: 'pointer',
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background = '#21262d'; }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#f8fafc'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
                   {b}

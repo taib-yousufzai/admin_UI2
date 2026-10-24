@@ -703,19 +703,19 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
             bottom: '24px',
             left: '50%',
             transform: 'translateX(-50%)',
-            background: '#161b22',
-            border: '1px solid #30363d',
+            background: '#ffffff',
+            border: '1px solid #e2e8f0',
             borderRadius: '10px',
             padding: '10px 18px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
             display: 'flex',
             alignItems: 'center',
             gap: '14px',
             zIndex: 900,
             backdropFilter: 'blur(8px)',
           }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#e6edf3' }}>
-              <span style={{ color: '#58a6ff', fontWeight: 700 }}>{selectedPosIds.size}</span> Positions Selected
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>
+              <span style={{ color: '#2563eb', fontWeight: 700 }}>{selectedPosIds.size}</span> Positions Selected
             </span>
             <button
               onClick={handleBulkSqoff}
@@ -737,9 +737,9 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
               onClick={handleBulkExport}
               style={{
                 padding: '6px 14px',
-                background: '#21262d',
-                color: '#c9d1d9',
-                border: '1px solid #30363d',
+                background: '#f8fafc',
+                color: '#0f172a',
+                border: '1px solid #e2e8f0',
                 borderRadius: '6px',
                 fontSize: '11px',
                 fontWeight: 500,

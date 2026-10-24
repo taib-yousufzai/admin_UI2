@@ -78,24 +78,24 @@ export default function TransactionsPage({ isDemoMode, initialSearch }: {
               onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
             />
             {showDropdown && (
-              <div style={{ position: 'absolute', top: 50, left: 0, right: 0, background: '#161b22', border: '1px solid #30363d', borderRadius: 10, zIndex: 100, maxHeight: 250, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+              <div style={{ position: 'absolute', top: 50, left: 0, right: 0, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 10, zIndex: 100, maxHeight: 250, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
                 {Array.from(new Map(requests.map(r => [r.user_id, { id: r.user_id, name: r.user_name }])).values())
                   .filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.id.toLowerCase().includes(search.toLowerCase()))
                   .map(u => (
                     <div 
                       key={u.id} 
-                      style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #21262d', color: '#c9d1d9', display: 'flex', flexDirection: 'column' }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = '#21262d'}
+                      style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9', color: '#0f172a', display: 'flex', flexDirection: 'column' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
                       onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                       onClick={() => { setSearch(u.name); setPage(1); setShowDropdown(false); }}
                     >
                       <span style={{ fontWeight: 600 }}>{u.name}</span>
-                      <span style={{ fontSize: '0.75rem', color: '#8b949e' }}>{u.id}</span>
+                      <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{u.id}</span>
                     </div>
                   ))}
                 {Array.from(new Map(requests.map(r => [r.user_id, { id: r.user_id, name: r.user_name }])).values())
                   .filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.id.toLowerCase().includes(search.toLowerCase())).length === 0 && (
-                    <div style={{ padding: '14px', color: '#8b949e', fontSize: '0.85rem', textAlign: 'center' }}>No users found</div>
+                    <div style={{ padding: '14px', color: '#64748b', fontSize: '0.85rem', textAlign: 'center' }}>No users found</div>
                   )}
               </div>
             )}
@@ -147,7 +147,7 @@ export default function TransactionsPage({ isDemoMode, initialSearch }: {
                     </span>
                 </div>
               </div>
-              <div style={{ marginTop: 16, borderTop: '1px solid #21262d', paddingTop: 12, display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ marginTop: 16, borderTop: '1px solid #e2e8f0', paddingTop: 12, display: 'flex', justifyContent: 'space-between' }}>
                   <div className="adm-pay-time" style={{ display: 'flex', alignItems: 'center' }}>
                       <i className="far fa-clock" style={{ marginRight: 6 }} />
                       {new Date(r.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}

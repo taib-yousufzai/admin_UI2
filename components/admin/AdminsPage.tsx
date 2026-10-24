@@ -96,8 +96,8 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
           <button className="adm-btn-ghost" onClick={() => setSelectedBroker(null)}>
             <i className="fas fa-arrow-left" /> Back to {selectedAdmin.full_name}'s Brokers
           </button>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#e6edf3' }}>{updatedBroker.full_name || 'Unnamed Broker'}</div>
-          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#21262d', borderRadius: 4, fontFamily: 'monospace', color: '#8b949e' }}>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#0f172a' }}>{updatedBroker.full_name || 'Unnamed Broker'}</div>
+          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 4, fontFamily: 'monospace', color: '#475569' }}>
             ID: {updatedBroker.id}
           </div>
         </div>
@@ -119,7 +119,7 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
           </div>
         </div>
 
-        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #30363d', paddingBottom: 10, marginBottom: 16, color: '#e6edf3' }}>
+        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #e2e8f0', paddingBottom: 10, marginBottom: 16, color: '#0f172a' }}>
           Users Under {updatedBroker.full_name || 'this Broker'} ({brokerUsers.length})
         </div>
 
@@ -178,8 +178,8 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
           <button className="adm-btn-ghost" onClick={() => setSelectedAdmin(null)}>
             <i className="fas fa-arrow-left" /> Back to Admins
           </button>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#e6edf3' }}>{updatedAdmin.full_name || 'Unnamed Admin'}</div>
-          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#21262d', borderRadius: 4, fontFamily: 'monospace', color: '#8b949e' }}>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#0f172a' }}>{updatedAdmin.full_name || 'Unnamed Admin'}</div>
+          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 4, fontFamily: 'monospace', color: '#475569' }}>
             ID: {updatedAdmin.id}
           </div>
         </div>
@@ -195,7 +195,7 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
           </div>
         </div>
 
-        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #30363d', paddingBottom: 10, marginBottom: 16, color: '#e6edf3' }}>
+        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #e2e8f0', paddingBottom: 10, marginBottom: 16, color: '#0f172a' }}>
           Brokers Under {updatedAdmin.full_name || 'this Admin'} ({adminBrokers.length})
         </div>
 
@@ -213,11 +213,11 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
               return (
                 <div key={b.id} className="adm-users-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.2s' }} onClick={() => setSelectedBroker(b)}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 600, color: '#e6edf3', fontSize: '0.95rem' }}>{b.full_name || 'N/A'}</div>
+                    <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.95rem' }}>{b.full_name || 'N/A'}</div>
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                       <button 
                         className="adm-btn-ghost" 
-                        style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#f85149', borderColor: '#f8514940' }} 
+                        style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#dc2626', borderColor: '#fca5a5' }} 
                         onClick={(e) => handleUnlink(e, b.id, b.full_name)}
                       >
                         <i className="fas fa-unlink" style={{ marginRight: 6 }} />
@@ -228,12 +228,12 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
                       </button>
                     </div>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#8b949e' }}>
-                    <div>ID: <span style={{ color: '#e6edf3', fontFamily: 'monospace' }}>{b.id}</span></div>
-                    <div>Email: <span style={{ color: '#e6edf3' }}>{b.email}</span></div>
-                    <div>Total Users: <span style={{ color: '#e6edf3', fontWeight: 600 }}>{brokerUsers.length}</span></div>
-                    <div>Users Ledger: <span style={{ color: '#e6edf3' }}>₹{fmt(totalLedger)}</span></div>
-                    <div>Users M2M: <span style={{ color: totalM2m >= 0 ? '#2ea043' : '#f85149', fontWeight: 600 }}>{totalM2m >= 0 ? '+' : ''}₹{fmt(totalM2m)}</span></div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#64748b' }}>
+                    <div>ID: <span style={{ color: '#0f172a', fontFamily: 'monospace' }}>{b.id}</span></div>
+                    <div>Email: <span style={{ color: '#0f172a' }}>{b.email}</span></div>
+                    <div>Total Users: <span style={{ color: '#0f172a', fontWeight: 600 }}>{brokerUsers.length}</span></div>
+                    <div>Users Ledger: <span style={{ color: '#0f172a' }}>₹{fmt(totalLedger)}</span></div>
+                    <div>Users M2M: <span style={{ color: totalM2m >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{totalM2m >= 0 ? '+' : ''}₹{fmt(totalM2m)}</span></div>
                   </div>
                 </div>
               );
@@ -278,26 +278,26 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
           ))
         ) : filteredAdmins.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 0' }}>
-            <i className="fas fa-shield-alt" style={{ fontSize: '2.5rem', color: '#30363d', marginBottom: 12, display: 'block' }} />
-            <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>No admins found.</div>
+            <i className="fas fa-shield-alt" style={{ fontSize: '2.5rem', color: '#cbd5e1', marginBottom: 12, display: 'block' }} />
+            <div style={{ color: '#64748b', fontSize: '0.9rem' }}>No admins found.</div>
           </div>
         ) : (
           filteredAdmins.map(a => (
             <div key={a.id} className="adm-users-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.2s' }} onClick={() => setSelectedAdmin(a)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontWeight: 600, color: '#e6edf3', fontSize: '0.95rem' }}>
-                  <i className="fas fa-shield-alt" style={{ marginRight: '8px', color: '#1f6feb' }}></i>
+                <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.95rem' }}>
+                  <i className="fas fa-shield-alt" style={{ marginRight: '8px', color: '#2563eb' }}></i>
                   {a.full_name || 'N/A'}
                 </div>
                 <button className="adm-btn-ghost" style={{ padding: '4px 10px', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setSelectedAdmin(a); }}>
                   View Brokers
                 </button>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#8b949e' }}>
-                <div>ID: <span style={{ color: '#e6edf3', fontFamily: 'monospace' }}>{a.id}</span></div>
-                <div>Email: <span style={{ color: '#e6edf3' }}>{a.email}</span></div>
-                <div>Total Brokers: <span style={{ color: '#e6edf3', fontWeight: 600 }}>{a.totalBrokers}</span></div>
-                <div>Total Users: <span style={{ color: '#e6edf3', fontWeight: 600 }}>{a.totalUsers}</span></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#64748b' }}>
+                <div>ID: <span style={{ color: '#0f172a', fontFamily: 'monospace' }}>{a.id}</span></div>
+                <div>Email: <span style={{ color: '#0f172a' }}>{a.email}</span></div>
+                <div>Total Brokers: <span style={{ color: '#0f172a', fontWeight: 600 }}>{a.totalBrokers}</span></div>
+                <div>Total Users: <span style={{ color: '#0f172a', fontWeight: 600 }}>{a.totalUsers}</span></div>
               </div>
             </div>
           ))

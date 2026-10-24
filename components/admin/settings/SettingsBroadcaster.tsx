@@ -54,7 +54,7 @@ export default function SettingsBroadcaster() {
       </div>
 
       <div className="adm-card" style={{ maxWidth: 600, padding: 24 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#e6edf3', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #30363d' }}>New Broadcast Message</h3>
+        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#0f172a', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #e2e8f0' }}>New Broadcast Message</h3>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div className="adm-upd-field">
@@ -96,12 +96,12 @@ export default function SettingsBroadcaster() {
           </div>
         </div>
         
-        <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid #30363d', display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end' }}>
           <button 
             className="adm-btn-primary" 
             onClick={handleBroadcast} 
             disabled={saveLoading}
-            style={{ backgroundColor: '#3b82f6' }}
+            style={{ backgroundColor: '#2563eb' }}
           >
             {saveLoading ? 'Sending...' : 'Send Broadcast'}
           </button>

@@ -90,8 +90,8 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
           <button className="adm-btn-ghost" onClick={() => setSelectedBroker(null)}>
             <i className="fas fa-arrow-left" /> Back to Brokers
           </button>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#e6edf3' }}>{updatedBroker.full_name || 'Unnamed Broker'}</div>
-          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#21262d', borderRadius: 4, fontFamily: 'monospace', color: '#8b949e' }}>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600, color: '#0f172a' }}>{updatedBroker.full_name || 'Unnamed Broker'}</div>
+          <div style={{ fontSize: '0.8rem', padding: '4px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 4, fontFamily: 'monospace', color: '#475569' }}>
             ID: {updatedBroker.id}
           </div>
         </div>
@@ -113,7 +113,7 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
           </div>
         </div>
 
-        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #30363d', paddingBottom: 10, marginBottom: 16, color: '#e6edf3' }}>
+        <div style={{ marginTop: 24, fontSize: '1.1rem', fontWeight: 600, borderBottom: '1px solid #e2e8f0', paddingBottom: 10, marginBottom: 16, color: '#0f172a' }}>
           Users Under {updatedBroker.full_name || 'this Broker'} ({updatedBroker.usersList.length})
         </div>
 
@@ -126,11 +126,11 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
             updatedBroker.usersList.map((u: any) => (
               <div key={u.id} className="adm-users-card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontWeight: 600, color: '#e6edf3', fontSize: '0.95rem' }}>{u.full_name || 'N/A'}</div>
+                  <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.95rem' }}>{u.full_name || 'N/A'}</div>
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <button 
                       className="adm-btn-ghost" 
-                      style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#f85149', borderColor: '#f8514940' }} 
+                      style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#dc2626', borderColor: '#fca5a5' }} 
                       onClick={(e) => handleUnlink(e, u.id, u.full_name)}
                     >
                       <i className="fas fa-unlink" style={{ marginRight: 6 }} />
@@ -138,19 +138,19 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
                     </button>
                     <span style={{ 
                       padding: '2px 8px', borderRadius: 12, fontSize: '0.75rem', fontWeight: 600,
-                      background: u.active ? 'rgba(46,160,67,0.1)' : 'rgba(248,81,73,0.1)',
-                      color: u.active ? '#2ea043' : '#f85149'
+                      background: u.active ? '#dcfce7' : '#fee2e2',
+                      color: u.active ? '#16a34a' : '#dc2626'
                     }}>
                       {u.active ? 'Active' : 'Inactive'}
                     </span>
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#8b949e' }}>
-                  <div>ID: <span style={{ color: '#e6edf3', fontFamily: 'monospace' }}>{u.id}</span></div>
-                  <div>Email: <span style={{ color: '#e6edf3' }}>{u.email}</span></div>
-                  <div>Balance: <span style={{ color: '#e6edf3' }}>₹{fmt(u.balance)}</span></div>
-                  <div>Open P&L: <span style={{ color: (u.openPnl ?? 0) >= 0 ? '#2ea043' : '#f85149', fontWeight: 600 }}>{fmt(u.openPnl)}</span></div>
-                  <div>M2M: <span style={{ color: (u.m2m ?? 0) >= 0 ? '#2ea043' : '#f85149', fontWeight: 600 }}>{fmt(u.m2m)}</span></div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#64748b' }}>
+                  <div>ID: <span style={{ color: '#0f172a', fontFamily: 'monospace' }}>{u.id}</span></div>
+                  <div>Email: <span style={{ color: '#0f172a' }}>{u.email}</span></div>
+                  <div>Balance: <span style={{ color: '#0f172a' }}>₹{fmt(u.balance)}</span></div>
+                  <div>Open P&L: <span style={{ color: (u.openPnl ?? 0) >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{fmt(u.openPnl)}</span></div>
+                  <div>M2M: <span style={{ color: (u.m2m ?? 0) >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{fmt(u.m2m)}</span></div>
                 </div>
               </div>
             ))
@@ -193,24 +193,24 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
           ))
         ) : filteredBrokers.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '48px 0' }}>
-            <i className="fas fa-user-tie" style={{ fontSize: '2.5rem', color: '#30363d', marginBottom: 12, display: 'block' }} />
-            <div style={{ color: '#8b949e', fontSize: '0.9rem' }}>No brokers found.</div>
+            <i className="fas fa-user-tie" style={{ fontSize: '2.5rem', color: '#cbd5e1', marginBottom: 12, display: 'block' }} />
+            <div style={{ color: '#64748b', fontSize: '0.9rem' }}>No brokers found.</div>
           </div>
         ) : (
           filteredBrokers.map(b => (
             <div key={b.id} className="adm-users-card" style={{ display: 'flex', flexDirection: 'column', gap: 12, cursor: 'pointer', transition: 'border-color 0.2s' }} onClick={() => setSelectedBroker(b)}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontWeight: 600, color: '#e6edf3', fontSize: '0.95rem' }}>{b.full_name || 'N/A'}</div>
+                <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.95rem' }}>{b.full_name || 'N/A'}</div>
                 <button className="adm-btn-ghost" style={{ padding: '4px 10px', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); setSelectedBroker(b); }}>
                   View Details
                 </button>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#8b949e' }}>
-                <div>ID: <span style={{ color: '#e6edf3', fontFamily: 'monospace' }}>{b.id}</span></div>
-                <div>Email: <span style={{ color: '#e6edf3' }}>{b.email}</span></div>
-                <div>Users: <span style={{ color: '#e6edf3', fontWeight: 600 }}>{b.totalUsers} ({b.activeUsers} active)</span></div>
-                <div>Ledger: <span style={{ color: '#e6edf3' }}>₹{fmt(b.totalLedger)}</span></div>
-                <div>Users M2M: <span style={{ color: b.totalM2m >= 0 ? '#2ea043' : '#f85149', fontWeight: 600 }}>{b.totalM2m >= 0 ? '+' : ''}₹{fmt(b.totalM2m)}</span></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: '0.8rem', color: '#64748b' }}>
+                <div>ID: <span style={{ color: '#0f172a', fontFamily: 'monospace' }}>{b.id}</span></div>
+                <div>Email: <span style={{ color: '#0f172a' }}>{b.email}</span></div>
+                <div>Users: <span style={{ color: '#0f172a', fontWeight: 600 }}>{b.totalUsers} ({b.activeUsers} active)</span></div>
+                <div>Ledger: <span style={{ color: '#0f172a' }}>₹{fmt(b.totalLedger)}</span></div>
+                <div>Users M2M: <span style={{ color: b.totalM2m >= 0 ? '#16a34a' : '#dc2626', fontWeight: 600 }}>{b.totalM2m >= 0 ? '+' : ''}₹{fmt(b.totalM2m)}</span></div>
               </div>
             </div>
           ))

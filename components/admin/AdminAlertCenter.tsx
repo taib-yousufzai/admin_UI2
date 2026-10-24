@@ -99,10 +99,10 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
         onClick={() => setIsOpen(v => !v)}
         style={{
           position: 'relative',
-          background: isOpen ? 'rgba(56, 139, 253, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-          border: `1px solid ${isOpen ? '#58a6ff' : 'rgba(255, 255, 255, 0.1)'}`,
+          background: isOpen ? '#eff6ff' : '#f8fafc',
+          border: `1px solid ${isOpen ? '#2563eb' : '#e2e8f0'}`,
           borderRadius: '8px',
-          color: unreadCount > 0 ? '#f0f6fc' : '#8b949e',
+          color: unreadCount > 0 ? '#0f172a' : '#64748b',
           width: '36px',
           height: '36px',
           display: 'flex',
@@ -119,7 +119,7 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
             position: 'absolute',
             top: '-3px',
             right: '-3px',
-            background: '#f85149',
+            background: '#dc2626',
             color: '#fff',
             fontSize: '10px',
             fontWeight: 700,
@@ -130,7 +130,7 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
             alignItems: 'center',
             justifyContent: 'center',
             padding: '0 4px',
-            boxShadow: '0 0 6px rgba(248, 81, 73, 0.6)',
+            boxShadow: '0 0 6px rgba(220, 38, 38, 0.6)',
           }}>
             {unreadCount}
           </span>
@@ -144,10 +144,10 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
           top: 'calc(100% + 8px)',
           right: 0,
           width: '340px',
-          background: '#161b22',
-          border: '1px solid #30363d',
+          background: '#ffffff',
+          border: '1px solid #e2e8f0',
           borderRadius: '12px',
-          boxShadow: '0 12px 36px rgba(0,0,0,0.6)',
+          boxShadow: '0 12px 36px rgba(0,0,0,0.12)',
           zIndex: 9999,
           overflow: 'hidden',
           fontFamily: "'Inter', sans-serif",
@@ -155,20 +155,20 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
           {/* Header */}
           <div style={{
             padding: '12px 16px',
-            background: '#0d1117',
-            borderBottom: '1px solid #21262d',
+            background: '#ffffff',
+            borderBottom: '1px solid #e2e8f0',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#f0f6fc' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
               Risk & Notification Center
             </span>
             <span style={{
               fontSize: '11px',
-              color: unreadCount > 0 ? '#f85149' : '#238636',
+              color: unreadCount > 0 ? '#dc2626' : '#16a34a',
               fontWeight: 600,
-              background: unreadCount > 0 ? 'rgba(248, 81, 73, 0.15)' : 'rgba(35, 134, 54, 0.15)',
+              background: unreadCount > 0 ? 'rgba(220, 38, 38, 0.1)' : 'rgba(22, 163, 74, 0.1)',
               padding: '2px 8px',
               borderRadius: '4px',
             }}>
@@ -179,10 +179,10 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
           {/* List */}
           <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
             {alerts.length === 0 ? (
-              <div style={{ padding: '28px 16px', textAlign: 'center', color: '#8b949e' }}>
-                <i className="fas fa-check-circle" style={{ fontSize: '24px', color: '#238636', marginBottom: '8px' }}></i>
-                <div style={{ fontSize: '13px', fontWeight: 500 }}>All Systems Nominal</div>
-                <div style={{ fontSize: '11px', marginTop: '2px' }}>No margin breaches or pending approvals.</div>
+              <div style={{ padding: '28px 16px', textAlign: 'center', color: '#64748b' }}>
+                <i className="fas fa-check-circle" style={{ fontSize: '24px', color: '#16a34a', marginBottom: '8px' }}></i>
+                <div style={{ fontSize: '13px', fontWeight: 500, color: '#0f172a' }}>All Systems Nominal</div>
+                <div style={{ fontSize: '11px', marginTop: '2px', color: '#64748b' }}>No margin breaches or pending approvals.</div>
               </div>
             ) : (
               alerts.map(alert => {
@@ -193,25 +193,25 @@ export default function AdminAlertCenter({ isDemoMode, onNavigate }: {
                     onClick={() => handleAlertClick(alert.actionTab)}
                     style={{
                       padding: '12px 16px',
-                      borderBottom: '1px solid #21262d',
+                      borderBottom: '1px solid #f1f5f9',
                       cursor: alert.actionTab ? 'pointer' : 'default',
                       transition: 'background 0.15s',
-                      background: isCrit ? 'rgba(248, 81, 73, 0.05)' : 'transparent',
+                      background: isCrit ? 'rgba(220, 38, 38, 0.05)' : 'transparent',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = isCrit ? 'rgba(248, 81, 73, 0.1)' : 'rgba(255,255,255,0.03)'}
-                    onMouseLeave={e => e.currentTarget.style.background = isCrit ? 'rgba(248, 81, 73, 0.05)' : 'transparent'}
+                    onMouseEnter={e => e.currentTarget.style.background = isCrit ? 'rgba(220, 38, 38, 0.1)' : '#f8fafc'}
+                    onMouseLeave={e => e.currentTarget.style.background = isCrit ? 'rgba(220, 38, 38, 0.05)' : 'transparent'}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                      <i className={`fas ${isCrit ? 'fa-exclamation-circle' : 'fa-bell'}`} style={{ color: isCrit ? '#f85149' : '#eab308', fontSize: '13px' }}></i>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#f0f6fc', flex: 1 }}>
+                      <i className={`fas ${isCrit ? 'fa-exclamation-circle' : 'fa-bell'}`} style={{ color: isCrit ? '#dc2626' : '#d97706', fontSize: '13px' }}></i>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#0f172a', flex: 1 }}>
                         {alert.title}
                       </span>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#8b949e', lineHeight: 1.4 }}>
+                    <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4 }}>
                       {alert.message}
                     </div>
                     {alert.actionTab && (
-                      <div style={{ fontSize: '10px', color: '#58a6ff', fontWeight: 600, marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: '#2563eb', fontWeight: 600, marginTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         Resolve in {alert.actionTab.toUpperCase()} <i className="fas fa-arrow-right" style={{ fontSize: '9px' }}></i>
                       </div>
                     )}

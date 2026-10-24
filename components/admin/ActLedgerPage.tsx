@@ -52,9 +52,9 @@ function TypeBadge({ type }: { type: string }) {
         fontSize: '11px',
         fontWeight: 600,
         letterSpacing: '0.04em',
-        background: isOE ? '#1a4060' : '#1c2128',
-        color: isOE ? '#58a6ff' : '#8b949e',
-        border: `1px solid ${isOE ? '#388bfd40' : '#30363d'}`,
+        background: isOE ? '#eff6ff' : '#f1f5f9',
+        color: isOE ? '#2563eb' : '#475569',
+        border: `1px solid ${isOE ? '#bfdbfe' : '#e2e8f0'}`,
         whiteSpace: 'nowrap',
       }}
     >
@@ -138,7 +138,7 @@ function OrderExecutionCard({
             <button
               className="adm-al-details-btn"
               onClick={() => onViewTransactions(log.target_client_id || log.target_id!)}
-              style={{ fontSize: '11px', padding: '3px 10px', background: 'transparent', border: '1px solid #30363d', color: '#8b949e' }}
+              style={{ fontSize: '11px', padding: '3px 10px', background: '#ffffff', border: '1px solid #e2e8f0', color: '#475569' }}
             >
               Txs
             </button>
@@ -179,7 +179,7 @@ function OrderExecutionCard({
           style={{
             marginTop: 12,
             paddingTop: 10,
-            borderTop: '1px solid #21262d',
+            borderTop: '1px solid #e2e8f0',
           }}
         >
           <div
@@ -251,10 +251,10 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
     height: '30px',
     maxWidth: '300px',
     width: '100%',
-    background: '#0d1117',
-    border: '1px solid #30363d',
+    background: '#ffffff',
+    border: '1px solid #cbd5e1',
     borderRadius: 4,
-    color: '#e6edf3',
+    color: '#0f172a',
     fontSize: '12px',
   };
 
@@ -262,7 +262,7 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
     <div style={{ padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
       {/* Symbol */}
       <div className="adm-al-exp-row">
-        <span style={{ color: '#8b949e', fontSize: '12px', minWidth: 90 }}>Symbol</span>
+        <span style={{ color: '#64748b', fontSize: '12px', minWidth: 90 }}>Symbol</span>
         <input
           style={inputStyle}
           value={form.symbol}
@@ -272,7 +272,7 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
 
       {/* Qty */}
       <div className="adm-al-exp-row">
-        <span style={{ color: '#8b949e', fontSize: '12px', minWidth: 90 }}>Qty</span>
+        <span style={{ color: '#64748b', fontSize: '12px', minWidth: 90 }}>Qty</span>
         <input
           style={inputStyle}
           type="number"
@@ -283,7 +283,7 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
 
       {/* Price */}
       <div className="adm-al-exp-row">
-        <span style={{ color: '#8b949e', fontSize: '12px', minWidth: 90 }}>Price</span>
+        <span style={{ color: '#64748b', fontSize: '12px', minWidth: 90 }}>Price</span>
         <input
           style={inputStyle}
           type="number"
@@ -294,8 +294,8 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
 
       {/* Edit Remark — mandatory */}
       <div className="adm-al-exp-row" style={{ alignItems: 'flex-start' }}>
-        <span style={{ color: '#8b949e', fontSize: '12px', minWidth: 90, paddingTop: 4 }}>
-          Edit Remark <span style={{ color: '#f85149' }}>*</span>
+        <span style={{ color: '#64748b', fontSize: '12px', minWidth: 90, paddingTop: 4 }}>
+          Edit Remark <span style={{ color: '#dc2626' }}>*</span>
         </span>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 300, width: '100%' }}>
           <textarea
@@ -304,7 +304,7 @@ function EditForm({ log, onSave, onCancel, saving }: EditFormProps) {
               height: 64,
               resize: 'vertical',
               fontFamily: 'inherit',
-              borderColor: remarkError ? '#f85149' : '#30363d',
+              borderColor: remarkError ? '#dc2626' : '#cbd5e1',
             }}
             value={form.edit_remark}
             placeholder="Reason for this edit…"
@@ -519,7 +519,7 @@ export default function ActLedgerPage({ selectedUser, onOpenUserPanel, isDemoMod
                   <span
                     onClick={e => { e.stopPropagation(); onOpenUserPanel(); }}
                     style={{
-                      background: '#161b22', border: '1px solid #30363d', color: '#4493f8',
+                      background: '#eff6ff', border: '1px solid #bfdbfe', color: '#2563eb',
                       fontSize: '11px', cursor: 'pointer', padding: '2px 6px', borderRadius: '4px',
                     }}
                   >
@@ -605,15 +605,15 @@ export default function ActLedgerPage({ selectedUser, onOpenUserPanel, isDemoMod
               {isEditing && (
                 <div
                   style={{
-                    background: '#0d1117',
-                    border: '1px solid #30363d',
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
                     borderTop: 'none',
                     borderRadius: '0 0 8px 8px',
                     padding: '12px 16px',
                     marginTop: -4,
                   }}
                 >
-                  <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
                     Edit Log Entry
                   </div>
                   <EditForm

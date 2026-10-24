@@ -9,8 +9,8 @@ body:has(.diag-layout) {
   display: flex;
   min-height: 100vh;
   width: 100%;
-  background-color: #0b0e14;
-  color: #f1f3f5;
+  background-color: #ffffff;
+  color: #0f172a;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -29,21 +29,19 @@ body:has(.diag-layout) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid #e2e8f0;
   padding-bottom: 1.5rem;
 }
 
 .diag-header h1 {
   font-size: 2.2rem;
   font-weight: 800;
-  background: linear-gradient(135deg, #ffffff 0%, #a2a8b5 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #0f172a;
   margin-bottom: 0.2rem;
 }
 
 .diag-header .subtitle {
-  color: #6b7280;
+  color: #64748b;
   font-size: 0.95rem;
 }
 
@@ -106,22 +104,21 @@ body:has(.diag-layout) {
 }
 
 .diag-card {
-  background: rgba(20, 24, 33, 0.7);
-  backdrop-filter: blur(0.75rem);
-  -webkit-backdrop-filter: blur(0.75rem);
+  background: #ffffff;
   border-radius: 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid #e2e8f0;
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
   transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .diag-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 0.5rem 1.875rem rgba(0, 0, 0, 0.3);
-  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0.5rem 1.875rem rgba(0, 0, 0, 0.08);
+  border-color: #cbd5e1;
 }
 
 .diag-card--span-2 {
@@ -136,19 +133,20 @@ body:has(.diag-layout) {
   display: flex;
   align-items: center;
   gap: 0.8rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid #e2e8f0;
   padding-bottom: 0.8rem;
 }
 
 .card-header i {
   font-size: 1.2rem;
-  color: #3b82f6;
+  color: #2563eb;
 }
 
 .card-header h3 {
   font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+  color: #0f172a;
 }
 
 .card-body {
@@ -171,22 +169,22 @@ body:has(.diag-layout) {
 }
 
 .metric-label {
-  color: #a2a8b5;
+  color: #64748b;
 }
 
 .metric-value {
   font-family: 'SFMono-Regular', Consolas, "Liberation Mono", Menlo, monospace;
   font-weight: 600;
-  color: #e5e7eb;
+  color: #0f172a;
 }
 
 .font-highlight {
-  color: #3b82f6;
+  color: #2563eb;
 }
 
 /* Alert pane styling */
 .diag-card--alert-pane {
-  background: rgba(20, 24, 33, 0.85);
+  background: #ffffff;
 }
 
 .alerts-container {
@@ -201,7 +199,7 @@ body:has(.diag-layout) {
   justify-content: center;
   gap: 0.8rem;
   padding: 2rem;
-  color: #a2a8b5;
+  color: #64748b;
   font-size: 0.95rem;
 }
 
@@ -218,29 +216,29 @@ body:has(.diag-layout) {
   border-radius: 0.5rem;
   font-size: 0.85rem;
   gap: 1rem;
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
 }
 
 .alert-info {
-  background: rgba(59, 130, 246, 0.05);
-  border-color: rgba(59, 130, 246, 0.15);
+  background: #eff6ff;
+  border-color: #bfdbfe;
 }
 
 .alert-warning {
-  background: rgba(245, 158, 11, 0.05);
-  border-color: rgba(245, 158, 11, 0.15);
+  background: #fefce8;
+  border-color: #fef08a;
 }
 
 .alert-critical {
-  background: rgba(239, 68, 68, 0.06);
-  border-color: rgba(239, 68, 68, 0.2);
+  background: #fef2f2;
+  border-color: #fecaca;
   animation: flash-border 1.5s infinite alternate;
 }
 
 @keyframes flash-border {
-  from { border-color: rgba(239, 68, 68, 0.15); }
-  to { border-color: rgba(239, 68, 68, 0.4); }
+  from { border-color: #fca5a5; }
+  to { border-color: #ef4444; }
 }
 
 .alert-level-badge {
@@ -251,81 +249,81 @@ body:has(.diag-layout) {
   letter-spacing: 0.05em;
 }
 
-.level-info { background: #3b82f6; color: #ffffff; }
-.level-warning { background: #f59e0b; color: #000000; }
-.level-critical { background: #ef4444; color: #ffffff; }
+.level-info { background: #2563eb; color: #ffffff; }
+.level-warning { background: #d97706; color: #ffffff; }
+.level-critical { background: #dc2626; color: #ffffff; }
 
 .alert-message {
   flex: 1;
-  color: #e5e7eb;
+  color: #0f172a;
 }
 
 .alert-time {
-  color: #6b7280;
+  color: #64748b;
   font-family: monospace;
   font-size: 0.8rem;
 }
 
-/* Sidebar Dark Mode Unification inside Diagnostics Layout */
+/* Sidebar Light Mode Unification inside Diagnostics Layout */
 .diag-layout .desktop-sidebar {
-  background: #0d1117 !important;
-  border-right-color: rgba(255, 255, 255, 0.06) !important;
+  background: #ffffff !important;
+  border-right-color: #e2e8f0 !important;
 }
 
 .diag-layout .sidebar-header {
-  border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+  border-bottom-color: #e2e8f0 !important;
 }
 
 .diag-layout .logo-text {
-  color: #f0f6fc !important;
+  color: #0f172a !important;
 }
 
 .diag-layout .logo-text span {
-  color: #00cc66 !important;
+  color: #16a34a !important;
 }
 
 .diag-layout .collapse-btn {
-  background: #161b22 !important;
-  color: #8b949e !important;
+  background: #f8fafc !important;
+  color: #64748b !important;
 }
 
 .diag-layout .collapse-btn:hover {
-  background: #21262d !important;
-  color: #c9d1d9 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
 }
 
 .diag-layout .sidebar-item {
-  color: #8b949e !important;
+  color: #475569 !important;
 }
 
 .diag-layout .sidebar-item:hover {
-  background: #161b22 !important;
-  color: #c9d1d9 !important;
+  background: #f8fafc !important;
+  color: #0f172a !important;
 }
 
 .diag-layout .sidebar-item.active {
-  background: rgba(0, 204, 102, 0.1) !important;
-  color: #00cc66 !important;
+  background: #eff6ff !important;
+  color: #2563eb !important;
 }
 
 .diag-layout .active-indicator {
-  background: #00cc66 !important;
+  background: #2563eb !important;
 }
 
 .diag-layout .sidebar-footer {
-  border-top-color: rgba(255, 255, 255, 0.06) !important;
+  border-top-color: #e2e8f0 !important;
 }
 
 .diag-layout .sidebar-action-btn {
-  color: #8b949e !important;
+  color: #64748b !important;
 }
 
 .diag-layout .sidebar-action-btn:hover {
-  background: #161b22 !important;
-  color: #c9d1d9 !important;
+  background: #f8fafc !important;
+  color: #0f172a !important;
 }
 
 .diag-layout .sidebar-action-btn.logout:hover {
-  background: rgba(239, 68, 68, 0.1) !important;
-  color: #ff6b6b !important;
+  background: #fef2f2 !important;
+  color: #dc2626 !important;
 }

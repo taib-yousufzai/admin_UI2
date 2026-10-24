@@ -68,17 +68,17 @@ export default function SettingsApp() {
       </div>
 
       <div className="adm-card" style={{ maxWidth: 600, padding: 24 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#e6edf3', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #30363d' }}>Global Toggles</h3>
+        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#0f172a', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #e2e8f0' }}>Global Toggles</h3>
         
         {loading ? (
-          <div style={{ color: '#8b949e', padding: '16px 0' }}>Loading settings...</div>
+          <div style={{ color: '#64748b', padding: '16px 0' }}>Loading settings...</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             {/* Maintenance Mode */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Maintenance Mode</div>
-                <div style={{ color: '#8b949e', fontSize: '13px' }}>Shows a maintenance page to all users. Admins can still log in.</div>
+                <div style={{ fontWeight: 'bold', color: '#0f172a', marginBottom: 4 }}>Maintenance Mode</div>
+                <div style={{ color: '#64748b', fontSize: '13px' }}>Shows a maintenance page to all users. Admins can still log in.</div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                 <input 
@@ -93,15 +93,15 @@ export default function SettingsApp() {
             {/* Global Kill Switch */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 'bold', color: '#f43f5e', marginBottom: 4 }}>Global Trading Kill Switch</div>
-                <div style={{ color: '#8b949e', fontSize: '13px' }}>Emergency! Instantly disables all new order placement across the entire platform.</div>
+                <div style={{ fontWeight: 'bold', color: '#dc2626', marginBottom: 4 }}>Global Trading Kill Switch</div>
+                <div style={{ color: '#64748b', fontSize: '13px' }}>Emergency! Instantly disables all new order placement across the entire platform.</div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                 <input 
                   type="checkbox" 
                   checked={globalKillSwitch} 
                   onChange={(e) => setGlobalKillSwitch(e.target.checked)}
-                  style={{ accentColor: '#f43f5e', width: '20px', height: '20px' }}
+                  style={{ accentColor: '#dc2626', width: '20px', height: '20px' }}
                 />
               </label>
             </div>
@@ -109,8 +109,8 @@ export default function SettingsApp() {
             {/* Allow Registrations */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <div style={{ fontWeight: 'bold', color: '#e6edf3', marginBottom: 4 }}>Allow New Registrations</div>
-                <div style={{ color: '#8b949e', fontSize: '13px' }}>Controls whether new users can sign up via the public registration page.</div>
+                <div style={{ fontWeight: 'bold', color: '#0f172a', marginBottom: 4 }}>Allow New Registrations</div>
+                <div style={{ color: '#64748b', fontSize: '13px' }}>Controls whether new users can sign up via the public registration page.</div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                 <input 
@@ -124,7 +124,7 @@ export default function SettingsApp() {
           </div>
         )}
         
-        <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid #30363d' }}>
+        <div style={{ marginTop: 32, paddingTop: 20, borderTop: '1px solid #e2e8f0' }}>
           <button 
             className="adm-btn-primary" 
             onClick={handleSave} 

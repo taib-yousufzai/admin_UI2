@@ -258,12 +258,12 @@ export class AdminErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '32px', textAlign: 'center', background: '#161b22', borderRadius: '12px', margin: '24px', border: '1px solid #30363d' }}>
-          <i className="fas fa-exclamation-triangle" style={{ fontSize: '32px', color: '#f85149', marginBottom: '16px' }}></i>
-          <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#f0f6fc', marginBottom: '8px' }}>
+        <div style={{ padding: '32px', textAlign: 'center', background: '#ffffff', borderRadius: '12px', margin: '24px', border: '1px solid #e2e8f0', boxShadow: '0 4px 16px rgba(0,0,0,0.05)' }}>
+          <i className="fas fa-exclamation-triangle" style={{ fontSize: '32px', color: '#dc2626', marginBottom: '16px' }}></i>
+          <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#0f172a', marginBottom: '8px' }}>
             Failed to load {this.props.tabName ? this.props.tabName.toUpperCase() : 'module'}
           </h3>
-          <p style={{ fontSize: '13px', color: '#8b949e', marginBottom: '20px' }}>
+          <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '20px' }}>
             {this.state.error?.message || 'An unexpected rendering error occurred.'}
           </p>
           <button
@@ -298,14 +298,14 @@ export function Toast({ toast, onDismiss }: { toast: ToastState; onDismiss: () =
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 9999,
-        background: toast.type === 'success' ? '#1a7f4b' : '#b91c1c',
+        background: toast.type === 'success' ? '#16a34a' : '#dc2626',
         color: '#fff',
         padding: '12px 20px',
         borderRadius: 8,
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
         minWidth: 240,
         maxWidth: 400,
       }}
@@ -327,7 +327,7 @@ export function SkeletonLine({ width = '100%', height = 14, style = {} }: { widt
       width,
       height,
       borderRadius: 6,
-      background: 'linear-gradient(90deg, #21262d 25%, #30363d 50%, #21262d 75%)',
+      background: 'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%)',
       backgroundSize: '200% 100%',
       animation: 'adm-skeleton-shimmer 1.4s infinite',
       ...style,
@@ -337,7 +337,7 @@ export function SkeletonLine({ width = '100%', height = 14, style = {} }: { widt
 
 export function SkeletonCard({ rows = 3, style = {} }: { rows?: number; style?: React.CSSProperties }) {
   return (
-    <div style={{ background: '#161b22', border: '1px solid #21262d', borderRadius: 10, padding: '16px', display: 'flex', flexDirection: 'column', gap: 10, ...style }}>
+    <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '16px', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 1px 3px rgba(0,0,0,0.05)', ...style }}>
       {Array.from({ length: rows }).map((_, i) => (
         <SkeletonLine key={i} width={i === 0 ? '60%' : i % 2 === 0 ? '80%' : '90%'} />
       ))}
@@ -352,7 +352,7 @@ export function SkeletonTable({ cols = 4, rows = 5 }: { cols?: number; rows?: nu
         {Array.from({ length: cols }).map((_, i) => <SkeletonLine key={i} height={12} width="70%" />)}
       </div>
       {Array.from({ length: rows }).map((_, r) => (
-        <div key={r} style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 8, padding: '10px 12px', background: '#161b22', borderRadius: 8 }}>
+        <div key={r} style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 8, padding: '10px 12px', background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 8 }}>
           {Array.from({ length: cols }).map((_, c) => <SkeletonLine key={c} height={13} width={c === 0 ? '85%' : '60%'} />)}
         </div>
       ))}
@@ -376,7 +376,7 @@ export function ConfirmDialog({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.6)',
+        background: 'rgba(0,0,0,0.5)',
         zIndex: 9998,
         display: 'flex',
         alignItems: 'center',
@@ -386,18 +386,19 @@ export function ConfirmDialog({
     >
       <div
         style={{
-          background: '#161b22',
-          border: '1px solid #30363d',
+          background: '#ffffff',
+          border: '1px solid #e2e8f0',
           borderRadius: 12,
           padding: '24px',
           maxWidth: 360,
           width: '90%',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
         }}
         onClick={e => e.stopPropagation()}
       >
-        <div style={{ color: '#e6edf3', fontSize: '0.95rem', marginBottom: 20 }}>{message}</div>
+        <div style={{ color: '#0f172a', fontSize: '0.95rem', marginBottom: 20 }}>{message}</div>
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-          <button className="adm-sheet-cancel" onClick={onCancel} disabled={loading}>
+          <button className="adm-sheet-cancel" onClick={onCancel} disabled={loading} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b' }}>
             Cancel
           </button>
           <button className="adm-btn-primary" onClick={onConfirm} disabled={loading}>

@@ -203,30 +203,30 @@ export default function TemplateForm({ template, onBack, onSaved, isDemoMode, is
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 16px', borderBottom: '1px solid #30363d', flexShrink: 0,
+        padding: '10px 16px', borderBottom: '1px solid #e2e8f0', flexShrink: 0,
       }}>
         <button
           onClick={onBack}
-          style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.1rem', padding: '4px 8px' }}
+          style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.1rem', padding: '4px 8px' }}
         >
           ←
         </button>
-        <span style={{ color: '#e6edf3', fontWeight: 700, fontSize: '1rem' }}>
+        <span style={{ color: '#0f172a', fontWeight: 700, fontSize: '1rem' }}>
           {isEdit ? `Edit: ${template.name}` : 'New Template'}
         </span>
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, padding: '8px 12px', borderBottom: '1px solid #30363d', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: 4, padding: '8px 12px', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
         {(['profile', 'segments', 'scalper'] as FormTab[]).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
               padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
-              background: activeTab === tab ? '#1f2937' : 'transparent',
-              border: activeTab === tab ? '1px solid #374151' : '1px solid transparent',
-              color: activeTab === tab ? '#e6edf3' : '#8b949e',
+              background: activeTab === tab ? '#eff6ff' : 'transparent',
+              border: activeTab === tab ? '1px solid #bfdbfe' : '1px solid transparent',
+              color: activeTab === tab ? '#2563eb' : '#64748b',
               fontSize: '12px', fontWeight: activeTab === tab ? 600 : 400,
             }}
           >
@@ -236,7 +236,7 @@ export default function TemplateForm({ template, onBack, onSaved, isDemoMode, is
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: '#0d1117' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: '#ffffff' }}>
         {activeTab === 'profile' && (
           <ProfileTab
             name={name} setName={setName}
@@ -293,13 +293,13 @@ export default function TemplateForm({ template, onBack, onSaved, isDemoMode, is
 
       {/* Save footer */}
       <div style={{
-        padding: '12px 16px', borderTop: '1px solid #30363d',
+        padding: '12px 16px', borderTop: '1px solid #e2e8f0',
         display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0,
-        background: '#0d1117',
+        background: '#ffffff',
       }}>
         <button
           onClick={onBack}
-          style={{ background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9', padding: '8px 20px', borderRadius: 6, cursor: 'pointer', fontSize: '13px' }}
+          style={{ background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569', padding: '8px 20px', borderRadius: 6, cursor: 'pointer', fontSize: '13px' }}
         >
           Cancel
         </button>
@@ -407,8 +407,8 @@ function ProfileTab({
 
       {/* Segments selector */}
       <div>
-        <label style={{ color: '#c9d1d9', fontSize: '13px', fontWeight: 600, display: 'block', marginBottom: 8 }}>
-          Active Segments <span style={{ color: '#8b949e', fontWeight: 400 }}>(select segments to include in this template)</span>
+        <label style={{ color: '#0f172a', fontSize: '13px', fontWeight: 600, display: 'block', marginBottom: 8 }}>
+          Active Segments <span style={{ color: '#64748b', fontWeight: 400 }}>(select segments to include in this template)</span>
         </label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {ALL_SEGS.map(seg => (
@@ -417,9 +417,9 @@ function ProfileTab({
               onClick={() => toggleSegment(seg)}
               style={{
                 padding: '5px 12px', borderRadius: 20, fontSize: '11px', cursor: 'pointer',
-                background: segments.includes(seg) ? '#14532d' : '#21262d',
-                border: `1px solid ${segments.includes(seg) ? '#16a34a' : '#30363d'}`,
-                color: segments.includes(seg) ? '#86efac' : '#8b949e',
+                background: segments.includes(seg) ? '#dcfce7' : '#f8fafc',
+                border: `1px solid ${segments.includes(seg) ? '#16a34a' : '#e2e8f0'}`,
+                color: segments.includes(seg) ? '#16a34a' : '#64748b',
                 fontWeight: segments.includes(seg) ? 600 : 400,
               }}
             >

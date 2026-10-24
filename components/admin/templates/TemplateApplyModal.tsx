@@ -103,29 +103,29 @@ export default function TemplateApplyModal({ template, onClose, onApplied, isDem
     >
       <div
         style={{
-          background: '#161b22', border: '1px solid #30363d', borderRadius: 12,
+          background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 12,
           width: '90%', maxWidth: 560, maxHeight: '85vh',
           display: 'flex', flexDirection: 'column',
-          boxShadow: '0 24px 48px rgba(0,0,0,0.6)',
+          boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
         }}
         onClick={e => e.stopPropagation()}
       >
         <Toast toast={toast} onDismiss={() => setToast(null)} />
 
         {/* Modal header */}
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #30363d', flexShrink: 0 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <h3 style={{ color: '#e6edf3', fontSize: '1rem', fontWeight: 700, margin: 0 }}>
+              <h3 style={{ color: '#0f172a', fontSize: '1rem', fontWeight: 700, margin: 0 }}>
                 Apply Template
               </h3>
-              <p style={{ color: '#8b949e', fontSize: '12px', margin: '4px 0 0' }}>
+              <p style={{ color: '#64748b', fontSize: '12px', margin: '4px 0 0' }}>
                 {template.name} — select users to apply this template to
               </p>
             </div>
             <button
               onClick={onClose}
-              style={{ background: 'transparent', border: 'none', color: '#8b949e', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1, padding: '2px 6px' }}
+              style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1, padding: '2px 6px' }}
             >✕</button>
           </div>
 
@@ -142,17 +142,17 @@ export default function TemplateApplyModal({ template, onClose, onApplied, isDem
         {/* Select All row */}
         <div
           style={{
-            padding: '10px 20px', borderBottom: '1px solid #21262d',
+            padding: '10px 20px', borderBottom: '1px solid #e2e8f0',
             display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
-            background: '#0d1117',
+            background: '#f8fafc',
           }}
         >
           <Checkbox checked={allFilteredSelected} onChange={toggleSelectAll} />
-          <span style={{ color: '#c9d1d9', fontSize: '13px', fontWeight: 600 }}>
+          <span style={{ color: '#0f172a', fontSize: '13px', fontWeight: 600 }}>
             Select All ({filtered.length} {search ? 'matching' : 'users'})
           </span>
           {selectedIds.size > 0 && (
-            <span style={{ color: '#8b949e', fontSize: '12px', marginLeft: 'auto' }}>
+            <span style={{ color: '#64748b', fontSize: '12px', marginLeft: 'auto' }}>
               {selectedIds.size} selected
             </span>
           )}
@@ -181,13 +181,13 @@ export default function TemplateApplyModal({ template, onClose, onApplied, isDem
 
         {/* Footer */}
         <div style={{
-          padding: '12px 20px', borderTop: '1px solid #30363d',
+          padding: '12px 20px', borderTop: '1px solid #e2e8f0',
           display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0,
         }}>
           <button
             onClick={onClose}
             style={{
-              background: '#21262d', border: '1px solid #30363d', color: '#c9d1d9',
+              background: '#f8fafc', border: '1px solid #e2e8f0', color: '#475569',
               padding: '8px 20px', borderRadius: 6, cursor: 'pointer', fontSize: '13px',
             }}
           >
@@ -229,20 +229,20 @@ function UserRow({
       style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '10px 20px', cursor: 'pointer',
-        borderBottom: '1px solid #21262d',
-        background: checked ? 'rgba(20,184,166,0.06)' : hasTemplate ? 'rgba(255,255,255,0.02)' : 'transparent',
+        borderBottom: '1px solid #f1f5f9',
+        background: checked ? '#eff6ff' : 'transparent',
         transition: 'background 0.15s',
       }}
-      onMouseEnter={e => { if (!checked) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = checked ? 'rgba(20,184,166,0.06)' : hasTemplate ? 'rgba(255,255,255,0.02)' : 'transparent'; }}
+      onMouseEnter={e => { if (!checked) e.currentTarget.style.background = '#f8fafc'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = checked ? '#eff6ff' : 'transparent'; }}
     >
       <Checkbox checked={checked} onChange={onChange} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ color: '#e6edf3', fontSize: '13px', fontWeight: 600 }}>
+        <div style={{ color: '#0f172a', fontSize: '13px', fontWeight: 600 }}>
           {user.full_name ?? user.email}
         </div>
-        <div style={{ color: '#8b949e', fontSize: '11px', marginTop: 1 }}>
-          {user.client_id && <span style={{ color: '#6e7681' }}>{user.client_id.toUpperCase()} · </span>}
+        <div style={{ color: '#64748b', fontSize: '11px', marginTop: 1 }}>
+          {user.client_id && <span style={{ color: '#94a3b8' }}>{user.client_id.toUpperCase()} · </span>}
           {user.email}
         </div>
       </div>
@@ -250,8 +250,8 @@ function UserRow({
         {hasTemplate && (
           <span style={{
             fontSize: '10px', padding: '2px 6px', borderRadius: 10,
-            background: 'rgba(56, 189, 248, 0.1)',
-            color: '#38bdf8',
+            background: '#e0f2fe',
+            color: '#0284c7',
             marginBottom: '4px'
           }}>
             Re-apply
@@ -259,8 +259,8 @@ function UserRow({
         )}
         <span style={{
           fontSize: '10px', padding: '2px 6px', borderRadius: 10,
-          background: user.active ? '#14532d' : '#7c2d12',
-          color: user.active ? '#86efac' : '#fca5a5',
+          background: user.active ? '#dcfce7' : '#fee2e2',
+          color: user.active ? '#16a34a' : '#dc2626',
         }}>
           {user.active ? 'Active' : 'Inactive'}
         </span>
@@ -274,8 +274,8 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: () => voi
     <div
       onClick={e => { e.stopPropagation(); onChange(); }}
       style={{
-        width: 16, height: 16, borderRadius: 4, border: `2px solid ${checked ? '#14b8a6' : '#30363d'}`,
-        background: checked ? '#14b8a6' : 'transparent',
+        width: 16, height: 16, borderRadius: 4, border: `2px solid ${checked ? '#2563eb' : '#cbd5e1'}`,
+        background: checked ? '#2563eb' : '#ffffff',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: 'pointer', flexShrink: 0, transition: 'all 0.15s',
       }}

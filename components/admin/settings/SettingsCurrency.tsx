@@ -63,12 +63,12 @@ export default function SettingsCurrency() {
       </div>
 
       <div className="adm-card" style={{ maxWidth: 500, padding: 24 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 20, color: '#e6edf3', fontSize: '16px' }}>USD/INR Exchange Rate</h3>
+        <h3 style={{ marginTop: 0, marginBottom: 20, color: '#0f172a', fontSize: '16px' }}>USD/INR Exchange Rate</h3>
         
         <div className="adm-upd-field">
           <label className="adm-upd-label">1 USD equals (INR)</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ color: '#8b949e', fontWeight: 'bold' }}>₹</span>
+            <span style={{ color: '#64748b', fontWeight: 'bold' }}>₹</span>
             <input 
               type="number" 
               className="adm-upd-input" 
@@ -80,12 +80,12 @@ export default function SettingsCurrency() {
               style={{ maxWidth: 200 }}
             />
           </div>
-          <p style={{ margin: '8px 0 0', color: '#8b949e', fontSize: '12px' }}>
+          <p style={{ margin: '8px 0 0', color: '#64748b', fontSize: '12px' }}>
             This rate will be multiplied by the live USD price for applicable segments to display the INR equivalent.
           </p>
         </div>
         
-        <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid #30363d' }}>
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid #e2e8f0' }}>
           <button 
             className="adm-btn-primary" 
             onClick={handleSave} 

@@ -162,27 +162,27 @@ export default function TelegramPage() {
         ) : (
           <div className="adm-bot-list">
             {bots.map((b) => (
-              <div className="adm-bot-row" key={b.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', borderBottom: '1px solid #30363d', background: '#161b22', borderRadius: '8px', marginBottom: '10px' }}>
+              <div className="adm-bot-row" key={b.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px', border: '1px solid #e2e8f0', background: '#ffffff', borderRadius: '8px', marginBottom: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                   <i className="fab fa-telegram" style={{ color: '#2AABEE', fontSize: '1.8rem' }} />
                   <div className="adm-bot-info">
-                    <div className="adm-bot-name" style={{ fontWeight: 600, color: '#e6edf3', fontSize: '14px' }}>
+                    <div className="adm-bot-name" style={{ fontWeight: 600, color: '#0f172a', fontSize: '14px' }}>
                       {b.name || 'Telegram Bot'}
                     </div>
-                    <div className="adm-bot-token" style={{ color: '#8b949e', fontSize: '12px', fontFamily: 'monospace', marginTop: '2px' }}>
+                    <div className="adm-bot-token" style={{ color: '#64748b', fontSize: '12px', fontFamily: 'monospace', marginTop: '2px' }}>
                       Token: {b.token.slice(0, 10)}...{b.token.slice(-4)} · Chat ID: {b.chatId}
                     </div>
                     <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                      <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: b.active ? 'rgba(35, 134, 54, 0.2)' : 'rgba(110, 118, 129, 0.2)', color: b.active ? '#3fb950' : '#8b949e' }}>
+                      <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: b.active ? 'rgba(22, 163, 74, 0.1)' : '#f1f5f9', color: b.active ? '#16a34a' : '#64748b' }}>
                         {b.active ? '● Active' : '○ Inactive'}
                       </span>
                       {b.notifyOnTrade && (
-                        <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(56, 139, 253, 0.15)', color: '#58a6ff' }}>
+                        <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(37, 99, 235, 0.1)', color: '#2563eb' }}>
                           Trades
                         </span>
                       )}
                       {b.notifyOnLiquidation && (
-                        <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(218, 54, 51, 0.15)', color: '#f85149' }}>
+                        <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(220, 38, 38, 0.1)', color: '#dc2626' }}>
                           Liquidation
                         </span>
                       )}
@@ -193,7 +193,7 @@ export default function TelegramPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
                     className="adm-btn-secondary"
-                    style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', border: '1px solid #30363d', background: '#21262d', color: '#c9d1d9', cursor: 'pointer' }}
+                    style={{ padding: '6px 12px', fontSize: '12px', borderRadius: '6px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#0f172a', cursor: 'pointer' }}
                     onClick={() => handleToggle(b.id)}
                     disabled={saving}
                   >

@@ -216,9 +216,9 @@ export default function AdminPage() {
             <span style={{ color: '#f85149' }}>LOGOUT</span>
           </div>
         </nav>
-        <div style={{ padding: '16px', borderTop: '1px solid #21262d', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px', background: isDemoMode ? 'rgba(234, 179, 8, 0.1)' : 'rgba(255,255,255,0.05)', borderRadius: '8px', border: `1px solid ${isDemoMode ? 'rgba(234, 179, 8, 0.3)' : 'rgba(255,255,255,0.1)'}` }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: isDemoMode ? '#eab308' : '#8b949e' }}>
+        <div style={{ padding: '16px', borderTop: '1px solid #e2e8f0', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px', background: isDemoMode ? 'rgba(234, 179, 8, 0.1)' : '#f8fafc', borderRadius: '8px', border: `1px solid ${isDemoMode ? 'rgba(234, 179, 8, 0.3)' : '#e2e8f0'}` }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: isDemoMode ? '#b45309' : '#64748b' }}>
               <i className="fas fa-vial" style={{ marginRight: '6px' }}></i>
               {isDemoMode ? 'DEMO ENVIRONMENT' : 'LIVE ENVIRONMENT'}
             </span>

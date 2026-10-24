@@ -413,8 +413,8 @@ export default function PaymentAccountsPage({ isBroker = false }: { isBroker?: b
                 </div>
               </div>
               
-              <div className="bkm-bank-qr" style={{ display: 'flex', alignItems: 'center', gap: '14px', background: '#0d1117', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
-                <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div className="bkm-bank-qr" style={{ display: 'flex', alignItems: 'center', gap: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', padding: '10px', borderRadius: '8px', marginTop: '10px' }}>
+                <div style={{ background: '#fff', padding: '6px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #e2e8f0' }}>
                   {a.upi_id ? (
                     <QRCode
                       value={`upi://pay?pa=${encodeURIComponent(a.upi_id)}&pn=${encodeURIComponent(a.account_holder || a.bank_name)}&cu=INR`}
@@ -425,11 +425,11 @@ export default function PaymentAccountsPage({ isBroker = false }: { isBroker?: b
                   )}
                 </div>
                 <div className="bkm-qr-info" style={{ flex: 1 }}>
-                  <div style={{ fontSize: '10px', color: '#8b949e', textTransform: 'uppercase', fontWeight: 600 }}>UPI ID</div>
-                  <div className="upi-id" style={{ fontSize: '12px', fontWeight: 600, color: '#58a6ff', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
+                  <div style={{ fontSize: '10px', color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>UPI ID</div>
+                  <div className="upi-id" style={{ fontSize: '12px', fontWeight: 600, color: '#2563eb', wordBreak: 'break-all', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
                     {a.upi_id || 'N/A'}
                     {a.upi_id && (
-                      <button onClick={() => handleCopy(a.upi_id, 'UPI ID')} style={{ background: 'none', border: 'none', color: '#58a6ff', cursor: 'pointer' }} title="Copy UPI">
+                      <button onClick={() => handleCopy(a.upi_id, 'UPI ID')} style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer' }} title="Copy UPI">
                         <i className="far fa-copy" style={{ fontSize: '12px' }}></i>
                       </button>
                     )}
@@ -437,7 +437,7 @@ export default function PaymentAccountsPage({ isBroker = false }: { isBroker?: b
                 </div>
               </div>
 
-              <div style={{ marginTop: '14px', paddingTop: '10px', borderTop: '1px solid #21262d', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ marginTop: '14px', paddingTop: '10px', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <button
                   onClick={() => handleToggleActive(a)}
                   style={{

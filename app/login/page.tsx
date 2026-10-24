@@ -99,7 +99,7 @@ export default function AdminLoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#0B0E14',
+        background: '#ffffff',
         fontFamily: 'Inter, system-ui, sans-serif',
         padding: '1.5rem',
       }}
@@ -108,11 +108,11 @@ export default function AdminLoginPage() {
         style={{
           width: '100%',
           maxWidth: '400px',
-          background: '#151921',
-          border: '1px solid #262B36',
+          background: '#ffffff',
+          border: '1px solid #e2e8f0',
           borderRadius: '12px',
           padding: '2rem',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
         }}
       >
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
@@ -124,18 +124,18 @@ export default function AdminLoginPage() {
               width: '48px',
               height: '48px',
               borderRadius: '10px',
-              background: 'rgba(0, 200, 83, 0.1)',
-              color: '#00C853',
+              background: '#ecfdf5',
+              color: '#16a34a',
               marginBottom: '1rem',
               fontSize: '1.25rem',
             }}
           >
             <i className="fas fa-shield-alt" />
           </div>
-          <h1 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
-            MARGIN<span style={{ color: '#00C853' }}>APEX</span>
+          <h1 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', margin: 0 }}>
+            MARGIN<span style={{ color: '#16a34a' }}>APEX</span>
           </h1>
-          <p style={{ fontSize: '0.82rem', color: '#8A92A6', marginTop: '0.35rem' }}>
+          <p style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '0.35rem' }}>
             Administrative Control Panel
           </p>
         </div>
@@ -145,9 +145,9 @@ export default function AdminLoginPage() {
             style={{
               padding: '0.75rem 1rem',
               borderRadius: '8px',
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.25)',
-              color: '#EF4444',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              color: '#dc2626',
               fontSize: '0.82rem',
               marginBottom: '1.25rem',
             }}
@@ -158,7 +158,7 @@ export default function AdminLoginPage() {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#C5CAD6', marginBottom: '0.4rem' }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
               Email or Admin ID
             </label>
             <input
@@ -171,9 +171,9 @@ export default function AdminLoginPage() {
                 width: '100%',
                 padding: '0.7rem 0.9rem',
                 borderRadius: '8px',
-                background: '#0D1117',
-                border: '1px solid #2B313E',
-                color: '#FFFFFF',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                color: '#0f172a',
                 fontSize: '0.88rem',
                 outline: 'none',
                 boxSizing: 'border-box',
@@ -182,7 +182,7 @@ export default function AdminLoginPage() {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#C5CAD6', marginBottom: '0.4rem' }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#334155', marginBottom: '0.4rem' }}>
               Password
             </label>
             <input
@@ -195,9 +195,9 @@ export default function AdminLoginPage() {
                 width: '100%',
                 padding: '0.7rem 0.9rem',
                 borderRadius: '8px',
-                background: '#0D1117',
-                border: '1px solid #2B313E',
-                color: '#FFFFFF',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                color: '#0f172a',
                 fontSize: '0.88rem',
                 outline: 'none',
                 boxSizing: 'border-box',
@@ -212,8 +212,8 @@ export default function AdminLoginPage() {
               marginTop: '0.5rem',
               padding: '0.75rem',
               borderRadius: '8px',
-              background: '#00C853',
-              color: '#000000',
+              background: '#16a34a',
+              color: '#ffffff',
               fontWeight: 700,
               fontSize: '0.9rem',
               border: 'none',
@@ -227,9 +227,9 @@ export default function AdminLoginPage() {
 
           {/* Divider */}
           <div style={{ display: 'flex', alignItems: 'center', margin: '0.3rem 0', gap: '0.8rem' }}>
-            <div style={{ flex: 1, height: '1px', background: '#262B36' }} />
-            <span style={{ fontSize: '0.75rem', color: '#8A92A6', textTransform: 'uppercase' }}>or</span>
-            <div style={{ flex: 1, height: '1px', background: '#262B36' }} />
+            <div style={{ flex: 1, height: '1px', background: '#e2e8f0' }} />
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase' }}>or</span>
+            <div style={{ flex: 1, height: '1px', background: '#e2e8f0' }} />
           </div>
 
           {/* Quick Demo Admin Login */}
@@ -240,9 +240,9 @@ export default function AdminLoginPage() {
             style={{
               padding: '0.75rem',
               borderRadius: '8px',
-              background: 'rgba(88, 166, 255, 0.1)',
-              border: '1px solid rgba(88, 166, 255, 0.3)',
-              color: '#58a6ff',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              color: '#2563eb',
               fontWeight: 700,
               fontSize: '0.9rem',
               cursor: loading ? 'not-allowed' : 'pointer',

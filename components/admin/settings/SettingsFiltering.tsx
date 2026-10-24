@@ -102,7 +102,7 @@ export default function SettingsFiltering() {
       </div>
 
       <div className="adm-card" style={{ maxWidth: 600, padding: 24 }}>
-        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#e6edf3', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #30363d' }}>
+        <h3 style={{ marginTop: 0, marginBottom: 24, color: '#0f172a', fontSize: '16px', paddingBottom: 12, borderBottom: '1px solid #e2e8f0' }}>
           Options Strike Range
         </h3>
 
@@ -120,7 +120,7 @@ export default function SettingsFiltering() {
               step="1"
               style={{ maxWidth: 160 }}
             />
-            <p style={{ margin: '6px 0 0', color: '#8b949e', fontSize: '12px' }}>
+            <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '12px' }}>
               Number of CE and PE strikes to show around ATM for NIFTY, BANKNIFTY, etc. (e.g. 5 → 10 strikes total)
             </p>
           </div>
@@ -138,7 +138,7 @@ export default function SettingsFiltering() {
               step="1"
               style={{ maxWidth: 160 }}
             />
-            <p style={{ margin: '6px 0 0', color: '#8b949e', fontSize: '12px' }}>
+            <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '12px' }}>
               Number of CE and PE strikes to show around ATM for GOLD, CRUDEOIL, etc. (e.g. 7 → 14 strikes total)
             </p>
           </div>

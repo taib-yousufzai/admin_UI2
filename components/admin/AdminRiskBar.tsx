@@ -124,9 +124,8 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
         alignItems: 'center',
         gap: '14px',
         padding: '6px 12px',
-        background: 'rgba(22, 27, 34, 0.75)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(48, 54, 61, 0.8)',
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
         borderRadius: '8px',
         fontSize: '12px',
         fontFamily: "'Inter', sans-serif",
@@ -134,17 +133,17 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
       }}>
         {/* Live Gross MTM */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#8b949e', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          <span style={{ color: '#64748b', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             Gross MTM:
           </span>
           <span style={{
             fontWeight: 700,
             fontVariantNumeric: 'tabular-nums',
-            color: isProfit ? '#238636' : '#f85149',
-            background: isProfit ? 'rgba(35, 134, 54, 0.15)' : 'rgba(248, 81, 73, 0.15)',
+            color: isProfit ? '#16a34a' : '#dc2626',
+            background: isProfit ? 'rgba(22, 163, 74, 0.1)' : 'rgba(220, 38, 38, 0.1)',
             padding: '2px 8px',
             borderRadius: '4px',
-            border: `1px solid ${isProfit ? 'rgba(35, 134, 54, 0.3)' : 'rgba(248, 81, 73, 0.3)'}`
+            border: `1px solid ${isProfit ? 'rgba(22, 163, 74, 0.25)' : 'rgba(220, 38, 38, 0.25)'}`
           }}>
             {fmtCurrency(metrics.totalMtm)}
           </span>
@@ -152,19 +151,19 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
 
         {/* Live Margin Used */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#8b949e', fontWeight: 500 }}>Margin:</span>
-          <span style={{ color: '#e6edf3', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ color: '#64748b', fontWeight: 500 }}>Margin:</span>
+          <span style={{ color: '#0f172a', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
             {fmtMargin(metrics.totalMarginUsed)}
           </span>
         </div>
 
         {/* Open Positions Count */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#8b949e', fontWeight: 500 }}>Open Pos:</span>
+          <span style={{ color: '#64748b', fontWeight: 500 }}>Open Pos:</span>
           <span style={{
-            color: '#58a6ff',
+            color: '#2563eb',
             fontWeight: 600,
-            background: 'rgba(56, 139, 253, 0.12)',
+            background: 'rgba(37, 99, 235, 0.1)',
             padding: '1px 6px',
             borderRadius: '4px'
           }}>
@@ -204,7 +203,7 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
         <div style={{
           position: 'fixed',
           inset: 0,
-          background: 'rgba(0, 0, 0, 0.75)',
+          background: 'rgba(0, 0, 0, 0.6)',
           backdropFilter: 'blur(4px)',
           zIndex: 99999,
           display: 'flex',
@@ -213,33 +212,33 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
           padding: '16px'
         }} onClick={() => setKillSwitchOpen(false)}>
           <div style={{
-            background: '#161b22',
+            background: '#ffffff',
             border: '1px solid #f85149',
             borderRadius: '12px',
             padding: '24px',
             maxWidth: '480px',
             width: '100%',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.8), 0 0 20px rgba(248, 81, 73, 0.2)'
+            boxShadow: '0 12px 40px rgba(0,0,0,0.15), 0 0 20px rgba(248, 81, 73, 0.1)'
           }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
               <div style={{
                 width: '36px',
                 height: '36px',
                 borderRadius: '8px',
-                background: 'rgba(248, 81, 73, 0.2)',
+                background: 'rgba(248, 81, 73, 0.15)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#f85149',
+                color: '#dc2626',
                 fontSize: '18px'
               }}>
                 <i className="fas fa-exclamation-triangle"></i>
               </div>
               <div>
-                <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#f0f6fc', margin: 0 }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700, color: '#0f172a', margin: 0 }}>
                   Emergency Action Control
                 </h3>
-                <span style={{ fontSize: '11px', color: '#8b949e' }}>
+                <span style={{ fontSize: '11px', color: '#64748b' }}>
                   Platform-wide risk intervention and safety protocols
                 </span>
               </div>
@@ -252,8 +251,8 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                 alignItems: 'center',
                 gap: '10px',
                 padding: '10px 12px',
-                background: killAction === 'sqoff_all' ? 'rgba(248, 81, 73, 0.15)' : 'rgba(255,255,255,0.02)',
-                border: `1px solid ${killAction === 'sqoff_all' ? '#f85149' : '#30363d'}`,
+                background: killAction === 'sqoff_all' ? 'rgba(248, 81, 73, 0.08)' : '#f8fafc',
+                border: `1px solid ${killAction === 'sqoff_all' ? '#f85149' : '#e2e8f0'}`,
                 borderRadius: '8px',
                 cursor: 'pointer'
               }}>
@@ -265,8 +264,8 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                   style={{ accentColor: '#f85149' }}
                 />
                 <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#f0f6fc' }}>Square Off All Open Positions</div>
-                  <div style={{ fontSize: '11px', color: '#8b949e' }}>Sends market orders to close all active client positions immediately.</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>Square Off All Open Positions</div>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>Sends market orders to close all active client positions immediately.</div>
                 </div>
               </label>
 
@@ -275,8 +274,8 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                 alignItems: 'center',
                 gap: '10px',
                 padding: '10px 12px',
-                background: killAction === 'cancel_all' ? 'rgba(248, 81, 73, 0.15)' : 'rgba(255,255,255,0.02)',
-                border: `1px solid ${killAction === 'cancel_all' ? '#f85149' : '#30363d'}`,
+                background: killAction === 'cancel_all' ? 'rgba(248, 81, 73, 0.08)' : '#f8fafc',
+                border: `1px solid ${killAction === 'cancel_all' ? '#f85149' : '#e2e8f0'}`,
                 borderRadius: '8px',
                 cursor: 'pointer'
               }}>
@@ -288,16 +287,16 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                   style={{ accentColor: '#f85149' }}
                 />
                 <div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#f0f6fc' }}>Cancel All Pending Orders</div>
-                  <div style={{ fontSize: '11px', color: '#8b949e' }}>Purges all open limit, stop-loss, and pending trigger orders.</div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>Cancel All Pending Orders</div>
+                  <div style={{ fontSize: '11px', color: '#64748b' }}>Purges all open limit, stop-loss, and pending trigger orders.</div>
                 </div>
               </label>
             </div>
 
             {/* Confirmation input */}
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ fontSize: '12px', fontWeight: 500, color: '#c9d1d9', display: 'block', marginBottom: '6px' }}>
-                Type <span style={{ color: '#f85149', fontWeight: 700 }}>CONFIRM</span> to authenticate this action:
+              <label style={{ fontSize: '12px', fontWeight: 500, color: '#334155', display: 'block', marginBottom: '6px' }}>
+                Type <span style={{ color: '#dc2626', fontWeight: 700 }}>CONFIRM</span> to authenticate this action:
               </label>
               <input
                 type="text"
@@ -307,10 +306,10 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  background: '#0d1117',
-                  border: '1px solid #30363d',
+                  background: '#ffffff',
+                  border: '1px solid #e2e8f0',
                   borderRadius: '6px',
-                  color: '#f0f6fc',
+                  color: '#0f172a',
                   fontSize: '13px',
                   outline: 'none',
                   fontFamily: "'Inter', sans-serif"
@@ -325,10 +324,10 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                 disabled={actionLoading}
                 style={{
                   padding: '8px 16px',
-                  background: 'transparent',
-                  border: '1px solid #30363d',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
                   borderRadius: '6px',
-                  color: '#c9d1d9',
+                  color: '#334155',
                   fontSize: '12px',
                   cursor: 'pointer'
                 }}
@@ -340,10 +339,10 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
                 disabled={confirmPhrase.trim().toUpperCase() !== 'CONFIRM' || actionLoading}
                 style={{
                   padding: '8px 20px',
-                  background: confirmPhrase.trim().toUpperCase() === 'CONFIRM' ? '#da3633' : '#30363d',
+                  background: confirmPhrase.trim().toUpperCase() === 'CONFIRM' ? '#da3633' : '#e2e8f0',
                   border: 'none',
                   borderRadius: '6px',
-                  color: '#fff',
+                  color: confirmPhrase.trim().toUpperCase() === 'CONFIRM' ? '#fff' : '#94a3b8',
                   fontSize: '12px',
                   fontWeight: 600,
                   cursor: confirmPhrase.trim().toUpperCase() === 'CONFIRM' ? 'pointer' : 'not-allowed',

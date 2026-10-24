@@ -8,6 +8,8 @@
  */
 
 import { requireAdmin } from '../_auth';
+import { getRole } from '@/lib/roleUtils';
+import { getDescendantUserIds } from '@/lib/hierarchy';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +40,8 @@ export function aggregatePositions(
   positions: Array<{
     pnl: number | null;
     brokerage: number | null;
-    settlement: string | number | null;
+    settlement_amount?: number | null;
+    settlement?: string | number | null;
   }>,
 ): { net_pnl: number; brokerage: number; pnl_bkg: number; settlement: number } {
   let net_pnl = 0;
@@ -48,7 +51,8 @@ export function aggregatePositions(
   for (const pos of positions) {
     net_pnl += Number(pos.pnl ?? 0);
     brokerage += Number(pos.brokerage ?? 0);
-    settlement += Number(pos.settlement ?? 0);
+    const posSettlement = pos.settlement_amount ?? (typeof pos.settlement === 'number' ? pos.settlement : 0);
+    settlement += Number(posSettlement);
   }
 
   // Property 13: pnl_bkg MUST always equal net_pnl + brokerage
@@ -64,27 +68,34 @@ export function aggregatePositions(
 export async function GET(request: Request): Promise<Response> {
   try {
     // Step 1: Authenticate and authorize the caller
-    // Validates: Requirements 12.1–12.6
     const authResult = await requireAdmin(request);
     if (authResult instanceof Response) return authResult;
     const { adminClient } = authResult;
 
     // Step 2: Parse query params
-    // Validates: Requirements 10.1, 10.2
     const url = new URL(request.url);
     const dateFrom = url.searchParams.get('date_from') ?? null;
     const dateTo = url.searchParams.get('date_to') ?? null;
-    const filter = url.searchParams.get('filter') ?? 'all'; // all | subbrokers | brokers
+    const filter = url.searchParams.get('filter') ?? 'all';
     const search = url.searchParams.get('search') ?? null;
     const demoParam = url.searchParams.get('demo');
     const isDemo = demoParam === 'true';
 
     // Step 3: Query profiles with optional role filter and search
-    // Validates: Requirements 10.5, 10.6
+    const callerRole = getRole(authResult.callerUser);
+    const callerId = authResult.callerUser.id;
+
     let profilesQuery = adminClient
       .from('profiles')
-      .select('id, full_name, email, role, parent_id')
-      .eq('demo_user', isDemo);
+      .select('id, full_name, email, role, parent_id, demo_user');
+
+    const descendantIds = await getDescendantUserIds(adminClient, callerId, callerRole);
+    if (descendantIds !== null) {
+      if (descendantIds.length === 0) {
+        return Response.json([], { status: 200 });
+      }
+      profilesQuery = profilesQuery.in('id', descendantIds);
+    }
 
     if (filter === 'subbrokers') {
       profilesQuery = profilesQuery.eq('role', 'sub_broker');
@@ -98,23 +109,26 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
 
-    const { data: profilesData, error: profilesError } = await profilesQuery;
+    const { data: rawProfiles, error: profilesError } = await profilesQuery;
 
     if (profilesError) {
       return Response.json({ error: 'Internal server error' }, { status: 500 });
     }
 
-    const profiles = profilesData ?? [];
+    const isDemoProfile = (p: any) => Boolean(p.demo_user || (p.email && p.email.toLowerCase().includes('demo')));
+    const profiles = (rawProfiles ?? []).filter((p: any) => isDemo ? isDemoProfile(p) : !isDemoProfile(p));
 
     if (profiles.length === 0) {
       return Response.json([], { status: 200 });
     }
 
+    const targetUserIds = profiles.map((p: any) => p.id);
+
     // Step 4: Query positions for all users in the date range
-    // Validates: Requirements 10.3, 10.4
     let positionsQuery = adminClient
       .from('positions')
-      .select('user_id, pnl, brokerage, settlement');
+      .select('user_id, pnl, brokerage, settlement_amount, settlement')
+      .in('user_id', targetUserIds);
 
     if (dateFrom) {
       positionsQuery = positionsQuery.gte('created_at', dateFrom);
@@ -134,10 +148,9 @@ export async function GET(request: Request): Promise<Response> {
     const positions = positionsData ?? [];
 
     // Step 5: Build a map of user_id → aggregated position metrics
-    // Validates: Requirements 10.3, 10.4
     const positionsByUser = new Map<
       string,
-      Array<{ pnl: number | null; brokerage: number | null; settlement: string | number | null }>
+      Array<{ pnl: number | null; brokerage: number | null; settlement_amount?: number | null; settlement?: string | number | null }>
     >();
 
     for (const pos of positions) {
@@ -146,14 +159,14 @@ export async function GET(request: Request): Promise<Response> {
         positionsByUser.set(userId, []);
       }
       positionsByUser.get(userId)!.push({
-        pnl: pos.pnl,
-        brokerage: pos.brokerage,
+        pnl: pos.pnl != null ? Number(pos.pnl) : 0,
+        brokerage: pos.brokerage != null ? Number(pos.brokerage) : 0,
+        settlement_amount: pos.settlement_amount != null ? Number(pos.settlement_amount) : 0,
         settlement: pos.settlement,
       });
     }
 
     // Step 6: Map profiles to AccountItem[]
-    // Validates: Requirements 10.3, 10.4, 10.7
     const accounts: AccountItem[] = profiles.map(
       (profile: {
         id: string;

@@ -54,9 +54,9 @@ export default function AccountsPage({ isDemoMode }: { isDemoMode: boolean }) {
     return () => clearInterval(interval);
   }, [filter, dateFrom, dateTo, search, isDemoMode]);
 
-  const totalNetPnl = accounts.reduce((s, a) => s + a.net_pnl, 0);
-  const totalBrokerage = accounts.reduce((s, a) => s + a.brokerage, 0);
-  const totalPnlBkg = accounts.reduce((s, a) => s + a.pnl_bkg, 0);
+  const totalNetPnl = accounts.reduce((s, a) => s + (Number(a.net_pnl) || 0), 0);
+  const totalBrokerage = accounts.reduce((s, a) => s + (Number(a.brokerage) || 0), 0);
+  const totalPnlBkg = accounts.reduce((s, a) => s + (Number(a.pnl_bkg) || 0), 0);
   const summary: AccountSummary = {
     id: accounts.length > 0 ? (accounts[0].broker || '—') : '—',
     pnlBkg: totalPnlBkg,
@@ -87,7 +87,7 @@ export default function AccountsPage({ isDemoMode }: { isDemoMode: boolean }) {
   const totalPages = Math.max(1, Math.ceil(filtered.length / ROWS));
   const displayed = filtered.slice((page - 1) * ROWS, page * ROWS);
 
-  const fmt = (n: number | null | undefined) => (n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n: number | string | null | undefined) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="adm-acc-root">

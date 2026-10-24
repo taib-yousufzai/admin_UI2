@@ -35,9 +35,9 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
   const brokerStats = allBrokers.map(broker => {
     const brokerUsers = regularUsers.filter(u => u.parent_id === broker.id);
     const activeCount = brokerUsers.filter(u => u.active).length;
-    const totalM2m = brokerUsers.reduce((sum, u) => sum + (u.m2m ?? 0), 0);
-    const totalOpenPnl = brokerUsers.reduce((sum, u) => sum + (u.openPnl ?? 0), 0);
-    const totalLedger = brokerUsers.reduce((sum, u) => sum + (u.balance ?? 0), 0);
+    const totalM2m = brokerUsers.reduce((sum, u) => sum + (Number(u.m2m) || 0), 0);
+    const totalOpenPnl = brokerUsers.reduce((sum, u) => sum + (Number(u.openPnl) || 0), 0);
+    const totalLedger = brokerUsers.reduce((sum, u) => sum + (Number(u.balance) || 0), 0);
 
     return {
       ...broker,
@@ -56,7 +56,7 @@ export default function BrokersPage({ isDemoMode }: { isDemoMode: boolean }) {
     (b.email || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const fmt = (n: number) => (n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n: number | string | null | undefined) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const handleUnlink = async (e: React.MouseEvent, userId: string, userName: string) => {
     e.stopPropagation();

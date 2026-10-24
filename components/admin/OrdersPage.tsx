@@ -39,8 +39,8 @@ function exportToCsv(orders: Order[], filename = 'orders.csv') {
   const headers = ['Symbol', 'User ID', 'Side', 'Status', 'Qty', 'Price', 'Type', 'Info', 'Time'];
   const rows = orders.map(o => [
     o.symbol, o.user_id, o.side, o.status, o.qty,
-    o.price.toFixed(2), o.orderType,
-    `"${o.info.replace(/"/g, "'")}"`, o.time,
+    Number(o.price ?? 0).toFixed(2), o.orderType,
+    `"${(o.info || '').replace(/"/g, "'")}"`, o.time,
   ]);
   const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -133,7 +133,7 @@ export default function OrdersPage({ selectedUser, onOpenUserPanel, isDemoMode }
 
         const items = (rawOrders as {
           id: string; user_id?: string; user_name?: string; user_client_id?: string;
-          symbol: string; side: string; status: string; qty: number; price: number;
+          symbol: string; side: string; status: string; qty: number | string; price: number | string; fill_price?: number | string;
           order_type: string; info: string; created_at?: string; time?: string;
         }[]).map(r => ({
           id: r.id,
@@ -143,8 +143,8 @@ export default function OrdersPage({ selectedUser, onOpenUserPanel, isDemoMode }
           symbol: r.symbol,
           side: r.side as Order['side'],
           status: r.status as Order['status'],
-          qty: r.qty,
-          price: r.price,
+          qty: Number(r.qty ?? 0),
+          price: Number(r.price ?? r.fill_price ?? 0),
           orderType: r.order_type as Order['orderType'],
           info: r.info ?? '',
           time: r.created_at ?? r.time ?? '',
@@ -574,7 +574,7 @@ function OrderTable({ orders, showUser }: { orders: Order[]; showUser: boolean }
               <td data-label="Side"><span className={`ord-side ${o.side.toLowerCase()}`}>{o.side}</span></td>
               <td data-label="Status"><span className={`ord-status ${o.status.toLowerCase()}`}>{o.status}</span></td>
               <td data-label="Qty">{o.qty}</td>
-              <td data-label="Price">{(o.price ?? 0).toFixed(2)}</td>
+              <td data-label="Price">{Number(o.price ?? 0).toFixed(2)}</td>
               <td data-label="Type"><span className="ord-type-badge">{o.orderType}</span></td>
               <td data-label="Info" className="ord-info-cell">{o.info || '—'}</td>
               <td data-label="Time" style={{ textAlign: 'right', whiteSpace: 'nowrap' }} className="ord-time-cell">

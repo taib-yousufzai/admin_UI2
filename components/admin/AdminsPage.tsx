@@ -56,7 +56,7 @@ export default function AdminsPage({ isDemoMode }: { isDemoMode: boolean }) {
     (a.email || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const fmt = (n: number) => (n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n: number | string | null | undefined) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const handleUnlink = async (e: React.MouseEvent, userId: string, userName: string) => {
     e.stopPropagation();

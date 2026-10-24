@@ -1,173 +1,171 @@
-/**
- * GET /api/admin/users/[id]/positions
- *
- * Returns positions for a given user, with optional tab filtering, symbol search,
- * and pagination.
- *
- * Validates: Requirements 7.1–7.6, 12.1–12.6
- */
+import { NextResponse } from 'next/server';
+import { requireAdmin } from '@/app/api/admin/_auth';
 
-import { requireAdmin } from '../../../_auth';
-import { getRole } from '../../../../../../lib/auth';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type PositionItem = {
-  id: string;
-  user_id: string;
-  profiles?: { email: string; client_id?: string; full_name?: string } | null;
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  status: 'open' | 'active' | 'closed';
-  pnl: number;
-  qty_open: number;
-  qty_total: number;
-  avg_price: number;
-  entry_price: number;
-  ltp: number | null;
-  exit_price: number | null;
-  duration_seconds: number;
-  brokerage: number;
-  sl: number | null;
-  tp: number | null;
-  entry_time: string;
-  exit_time: string | null;
-  settlement: string | null;
-};
-
-// ---------------------------------------------------------------------------
-// Route handler
-// ---------------------------------------------------------------------------
+export const dynamic = 'force-dynamic';
 
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ id: string }> | { id: string } },
-): Promise<Response> {
+  { params }: { params: Promise<{ id: string }> | { id: string } }
+): Promise<NextResponse> {
+  const auth = await requireAdmin(request);
+  if (auth instanceof Response) return auth as NextResponse;
+
+  const { adminClient, callerUser, role } = auth;
+  const resolvedParams = await Promise.resolve(params);
+  const { id } = resolvedParams;
+  const { searchParams } = new URL(request.url);
+
+  const tab = (searchParams.get('tab') || 'open').toLowerCase();
+  const isDemo = searchParams.get('demo') === 'true';
+  const startDate = searchParams.get('start_date') || searchParams.get('startDate');
+  const endDate = searchParams.get('end_date') || searchParams.get('endDate');
+  const rows = Math.min(100000, Math.max(1, parseInt(searchParams.get('rows') || '1000', 10)));
+
   try {
-    // Step 1: Authenticate and authorize the caller
-    // Validates: Requirements 12.1–12.6
-    const authResult = await requireAdmin(request);
-    if (authResult instanceof Response) return authResult;
-    const { adminClient } = authResult;
+    const { getDescendantUserIds } = await import('@/lib/hierarchy');
+    const allowedUserIds = await getDescendantUserIds(adminClient, callerUser.id, role);
 
-    // Step 2: Resolve params
-    const resolvedParams = await Promise.resolve(params);
-    const id = resolvedParams.id;
+    if (allowedUserIds !== null && allowedUserIds.length === 0) {
+      return NextResponse.json([]);
+    }
 
-    // Step 3: Parse query params
-    // Validates: Requirements 7.3–7.6
-    const url = new URL(request.url);
-    const tab = url.searchParams.get('tab') ?? null;
-    const search = url.searchParams.get('search') ?? null;
-    const startDate = url.searchParams.get('start_date') ?? null;
-    const endDate = url.searchParams.get('end_date') ?? null;
-    const rowsParam = url.searchParams.get('rows') ?? null;
-    const pageParam = url.searchParams.get('page') ?? null;
-    const demoParam = url.searchParams.get('demo');
-    const isDemo = demoParam === 'true';
-    const rows = rowsParam ? parseInt(rowsParam, 10) : 100;
-    const page = pageParam ? parseInt(pageParam, 10) : 0;
-
-    // Step 4: Build query — filter by user_id, select all PositionItem fields
-    // Validates: Requirement 7.2
     let query = adminClient
       .from('positions')
-      .select(
-        'id, user_id, symbol, side, status, pnl, qty_open, qty_total, avg_price, entry_price, ltp, exit_price, duration_seconds, brokerage, sl, tp, entry_time, exit_time, settlement, profiles(email, client_id, full_name)',
-      );
+      .select('id, user_id, symbol, side, status, product_type, qty_open, qty_total, avg_price, entry_price, exit_price, ltp, pnl, brokerage, duration_seconds, sl, tp, entry_time, exit_time, settlement, created_at');
 
-    if (id !== 'all') {
+    if (allowedUserIds !== null) {
+      if (id && id !== 'all') {
+        if (!allowedUserIds.includes(id)) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+        query = query.eq('user_id', id);
+      } else {
+        query = query.in('user_id', allowedUserIds);
+      }
+    } else if (id && id !== 'all') {
       query = query.eq('user_id', id);
-    } else {
-      const callerRole = getRole(authResult.callerUser);
-      let pQuery = adminClient.from('profiles').select('id').eq('demo_user', isDemo);
-      
-      if (callerRole === 'broker') {
-        pQuery = pQuery.eq('parent_id', authResult.callerUser.id);
-      }
-      
-      const { data: matchedUsers } = await pQuery;
-      const matchedIds = matchedUsers?.map((u: { id: string }) => u.id) || [];
-      if (matchedIds.length === 0) {
-         return Response.json([], { status: 200 });
-      }
-      query = query.in('user_id', matchedIds);
     }
 
-    // Step 5: Apply tab filter
-    // Validates: Requirements 7.3, 7.4, 7.5
-    if (tab === 'open') {
-      query = query.eq('status', 'open');
+    if (tab === 'closed') {
+      query = query.or('status.in.(closed,CLOSED),qty_open.lte.0');
     } else if (tab === 'active') {
-      query = query.eq('status', 'active');
-    } else if (tab === 'closed') {
-      query = query.eq('status', 'closed');
-    }
-    // default (no tab) → no status filter
-
-    // Step 6: Apply symbol search filter
-    if (search) {
-      query = query.ilike('symbol', `%${search}%`);
+      query = query.in('status', ['active', 'ACTIVE']).gt('qty_open', 0);
+    } else if (tab === 'open') {
+      query = query.in('status', ['open', 'OPEN']).gt('qty_open', 0);
+    } else {
+      query = query.in('status', ['open', 'active', 'OPEN', 'ACTIVE']).gt('qty_open', 0);
     }
 
-    // Apply date range filters
     if (startDate) {
-      query = query.gte('entry_time', startDate + 'T00:00:00.000Z');
+      query = query.gte('created_at', startDate);
     }
     if (endDate) {
-      query = query.lte('entry_time', endDate + 'T23:59:59.999Z');
+      const toDate = new Date(endDate);
+      toDate.setHours(23, 59, 59, 999);
+      query = query.lte('created_at', toDate.toISOString());
     }
 
-    // Apply newest to oldest sorting
-    if (tab === 'closed') {
-      query = query.order('exit_time', { ascending: false, nullsFirst: false }).order('entry_time', { ascending: false });
-    } else {
-      query = query.order('entry_time', { ascending: false });
-    }
-
-    // Step 7: Apply pagination
-    // Validates: Requirement 7.6
-    const from = page * rows;
-    const to = from + rows - 1;
-    query = query.range(from, to);
-
-    const { data, error } = await query;
+    const { data: rawPositions, error } = await query
+      .order(tab === 'closed' ? 'exit_time' : 'created_at', { ascending: false })
+      .limit(rows);
 
     if (error) {
-      return Response.json({ error: 'Internal server error' }, { status: 500 });
+      console.error('[GET /api/admin/users/[id]/positions] Error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Step 8: Return PositionItem[]
-    // Validates: Requirement 7.1
-    const positions: PositionItem[] = (data ?? []).map(
-      (row: any) => ({
-        id: row.id,
-        user_id: row.user_id,
-        profiles: row.profiles,
-        symbol: row.symbol,
-        side: row.side as 'BUY' | 'SELL',
-        status: row.status as 'open' | 'active' | 'closed',
-        pnl: row.pnl,
-        qty_open: row.qty_open,
-        qty_total: row.qty_total,
-        avg_price: row.avg_price,
-        entry_price: row.entry_price,
-        ltp: row.ltp,
-        exit_price: row.exit_price,
-        duration_seconds: row.duration_seconds,
-        brokerage: row.brokerage,
-        sl: row.sl,
-        tp: row.tp,
-        entry_time: row.entry_time,
-        exit_time: row.exit_time,
-        settlement: row.settlement,
-      }),
-    );
+    let posList = rawPositions ?? [];
 
-    return Response.json(positions, { status: 200 });
-  } catch {
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
+    // Strict in-memory partitioning:
+    if (tab === 'closed') {
+      posList = posList.filter((p: any) => {
+        const s = String(p.status || '').toLowerCase();
+        const q = Number(p.qty_open || 0);
+        return s === 'closed' || q <= 0;
+      });
+    } else if (tab === 'active') {
+      posList = posList.filter((p: any) => {
+        const s = String(p.status || '').toLowerCase();
+        const q = Number(p.qty_open || 0);
+        return s === 'active' && q > 0;
+      });
+    } else if (tab === 'open') {
+      posList = posList.filter((p: any) => {
+        const s = String(p.status || '').toLowerCase();
+        const q = Number(p.qty_open || 0);
+        return s === 'open' && q > 0;
+      });
+    } else {
+      posList = posList.filter((p: any) => {
+        const s = String(p.status || '').toLowerCase();
+        const q = Number(p.qty_open || 0);
+        return (s === 'open' || s === 'active') && q > 0;
+      });
+    }
+    const userIds = Array.from(new Set(posList.map((p: any) => p.user_id).filter(Boolean)));
+
+    let profilesMap: Record<string, any> = {};
+    if (userIds.length > 0) {
+      const { data: profilesData } = await adminClient
+        .from('profiles')
+        .select('id, client_id, full_name, email, demo_user')
+        .in('id', userIds);
+      if (profilesData) {
+        for (const prof of profilesData) {
+          profilesMap[prof.id] = prof;
+        }
+      }
+    }
+
+    let positions = posList.map((p: any) => {
+      const prof = profilesMap[p.user_id];
+      const isClosed = ['closed', 'CLOSED'].includes(p.status) || Number(p.qty_open || 0) <= 0;
+      const rawStatus = String(p.status || '').toLowerCase();
+      const status = isClosed ? 'closed' : (rawStatus === 'active' ? 'active' : 'open');
+      return {
+        id: p.id,
+        user_id: p.user_id,
+        symbol: p.symbol,
+        side: (p.side || 'BUY').toUpperCase(),
+        status,
+        product_type: p.product_type || 'INTRADAY',
+        qty_open: isClosed ? 0 : Number(p.qty_open || 0),
+        qty_total: Number(p.qty_total || p.qty_open || 0),
+        avg_price: Number(p.avg_price || p.entry_price || 0),
+        entry_price: Number(p.entry_price || p.avg_price || 0),
+        exit_price: p.exit_price ? Number(p.exit_price) : undefined,
+        ltp: p.ltp != null ? Number(p.ltp) : undefined,
+        pnl: Number(p.pnl || 0),
+        brokerage: Number(p.brokerage || 0),
+        duration_seconds: Number(p.duration_seconds || 0),
+        sl: p.sl != null ? Number(p.sl) : null,
+        tp: p.tp != null ? Number(p.tp) : null,
+        entry_time: p.entry_time || p.created_at,
+        exit_time: p.exit_time,
+        settlement: p.settlement || 'NSE',
+        profiles: prof ? {
+          client_id: prof.client_id || '',
+          full_name: prof.full_name || '',
+          email: prof.email || '',
+          demo_user: Boolean(prof?.demo_user || prof?.email?.toLowerCase().includes('demo')),
+        } : undefined,
+      };
+    });
+
+    // Demo filtering
+    if (isDemo) {
+      positions = positions.filter((p: any) => p.profiles?.demo_user || p.profiles?.email?.toLowerCase().includes('demo'));
+    } else if (Object.keys(profilesMap).length > 0) {
+      positions = positions.filter((p: any) => !p.profiles?.demo_user && !p.profiles?.email?.toLowerCase().includes('demo'));
+    }
+
+    return NextResponse.json(positions, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      },
+    });
+  } catch (err: any) {
+    console.error('[GET /api/admin/users/[id]/positions] Fatal error:', err);
+    return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }

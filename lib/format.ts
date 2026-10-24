@@ -8,21 +8,25 @@
  *   - All functions are pure (no side effects, no React deps).
  *   - Locale is always 'en-IN' for numeric formatting.
  *   - Null / undefined / NaN inputs return a safe fallback string, never throw.
+ *   - Accepts number, string, null, or undefined and safely converts via Number(...).
  *   - No default exports — use named imports.
  */
 
 // ─── Currency & Price ─────────────────────────────────────────────────────────
 
 /**
- * Formats a number as an Indian-locale rupee amount with 2 decimal places.
+ * Formats a number or string number as an Indian-locale rupee amount with 2 decimal places.
  * Returns '—' for null / undefined / NaN.
  *
  * @example fmtCurrency(123456.78)  → '₹1,23,456.78'
+ * @example fmtCurrency("123456.78") → '₹1,23,456.78'
  * @example fmtCurrency(null)       → '—'
  */
-export function fmtCurrency(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value)) return '—';
-  return '₹' + value.toLocaleString('en-IN', {
+export function fmtCurrency(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (isNaN(n)) return '—';
+  return '₹' + n.toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -32,12 +36,15 @@ export function fmtCurrency(value: number | null | undefined): string {
  * Formats a price — same as fmtCurrency but returns '--' on null/undefined
  * to match the trading UI convention (dashes instead of em-dash for prices).
  *
- * @example fmtPrice(105.50)  → '₹105.50'
- * @example fmtPrice(null)    → '--'
+ * @example fmtPrice(105.50)   → '₹105.50'
+ * @example fmtPrice("105.50") → '₹105.50'
+ * @example fmtPrice(null)     → '--'
  */
-export function fmtPrice(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value as number)) return '--';
-  return '₹' + value.toLocaleString('en-IN', {
+export function fmtPrice(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '--';
+  const n = Number(value);
+  if (isNaN(n)) return '--';
+  return '₹' + n.toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -51,10 +58,12 @@ export function fmtPrice(value: number | null | undefined): string {
  * @example fmtPnl(-500)      → '-₹500.00'
  * @example fmtPnl(0)         → '+₹0.00'
  */
-export function fmtPnl(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value)) return '—';
-  const sign = value >= 0 ? '+' : '-';
-  return sign + '₹' + Math.abs(value).toLocaleString('en-IN', {
+export function fmtPnl(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (isNaN(n)) return '—';
+  const sign = n >= 0 ? '+' : '-';
+  return sign + '₹' + Math.abs(n).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -67,9 +76,11 @@ export function fmtPnl(value: number | null | undefined): string {
  * @example fmtNum(42.5)   → '42.50'
  * @example fmtNum(null)   → '0.00'
  */
-export function fmtNum(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value as number)) return '0.00';
-  return value.toLocaleString('en-IN', {
+export function fmtNum(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '0.00';
+  const n = Number(value);
+  if (isNaN(n)) return '0.00';
+  return n.toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -83,10 +94,12 @@ export function fmtNum(value: number | null | undefined): string {
  * @example fmtPercent(1.5)   → '+1.50%'
  * @example fmtPercent(-0.8)  → '-0.80%'
  */
-export function fmtPercent(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value as number)) return '0.00%';
-  const sign = value >= 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
+export function fmtPercent(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '0.00%';
+  const n = Number(value);
+  if (isNaN(n)) return '0.00%';
+  const sign = n >= 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
 }
 
 // ─── Quantity ─────────────────────────────────────────────────────────────────
@@ -97,9 +110,11 @@ export function fmtPercent(value: number | null | undefined): string {
  *
  * @example fmtQty(12500)  → '12,500'
  */
-export function fmtQty(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value as number)) return '0';
-  return Math.round(value).toLocaleString('en-IN');
+export function fmtQty(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '0';
+  const n = Number(value);
+  if (isNaN(n)) return '0';
+  return Math.round(n).toLocaleString('en-IN');
 }
 
 // ─── Compact / Balance ────────────────────────────────────────────────────────
@@ -113,10 +128,12 @@ export function fmtQty(value: number | null | undefined): string {
  * @example fmtBalance(850)     → '850.00'
  * @example fmtBalance(null)    → '...'
  */
-export function fmtBalance(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '...';
-  if (value > 999) return (value / 1000).toFixed(2) + 'k';
-  return value.toFixed(2);
+export function fmtBalance(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '...';
+  const n = Number(value);
+  if (isNaN(n)) return '...';
+  if (n > 999) return (n / 1000).toFixed(2) + 'k';
+  return n.toFixed(2);
 }
 
 /**
@@ -128,10 +145,12 @@ export function fmtBalance(value: number | null | undefined): string {
  * @example fmtCompact(250000)      → '2.5L'
  * @example fmtCompact(15000000)    → '1.5Cr'
  */
-export function fmtCompact(value: number | null | undefined): string {
-  if (value === null || value === undefined || isNaN(value as number)) return '0';
-  const abs = Math.abs(value);
-  const sign = value < 0 ? '-' : '';
+export function fmtCompact(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '0';
+  const n = Number(value);
+  if (isNaN(n)) return '0';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
   if (abs >= 10_000_000) return sign + (abs / 10_000_000).toFixed(2) + 'Cr';
   if (abs >= 100_000)    return sign + (abs / 100_000).toFixed(2) + 'L';
   if (abs >= 1_000)      return sign + (abs / 1_000).toFixed(2) + 'k';

@@ -108,17 +108,25 @@ export function formatDuration(seconds: number): string {
 }
 
 export function positionItemToPosition(item: PositionItem): Position {
-  let currentPnl = item.pnl || 0;
-  if ((item.status === 'open' || item.status === 'active') && item.ltp != null) {
+  let currentPnl = Number(item.pnl || 0);
+  const avgPrice = Number(item.avg_price || item.entry_price || 0);
+  const entryPrice = Number(item.entry_price || item.avg_price || 0);
+  const ltp = item.ltp != null ? Number(item.ltp) : undefined;
+  const exitPrice = item.exit_price != null ? Number(item.exit_price) : undefined;
+  const qtyOpen = Number(item.qty_open || 0);
+  const qtyTotal = Number(item.qty_total || item.qty_open || 0);
+  const brokerage = Number(item.brokerage || 0);
+
+  if ((item.status === 'open' || item.status === 'active') && ltp != null) {
       const unrealized = item.side === 'BUY' 
-          ? (item.ltp - item.avg_price) * item.qty_open 
-          : (item.avg_price - item.ltp) * item.qty_open;
+          ? (ltp - avgPrice) * qtyOpen 
+          : (avgPrice - ltp) * qtyOpen;
       currentPnl += unrealized;
   }
 
   const durationSec = (item.status === 'open' || item.status === 'active')
     ? Math.max(0, Math.floor((Date.now() - new Date(item.entry_time).getTime()) / 1000))
-    : (item.duration_seconds || 0);
+    : Number(item.duration_seconds || 0);
 
   return {
     id: item.id,
@@ -128,20 +136,20 @@ export function positionItemToPosition(item: PositionItem): Position {
     symbol: item.symbol,
     side: item.side,
     pnl: currentPnl,
-    qty: `${item.qty_open}/${item.qty_total}`,
-    avgPrice: item.avg_price,
-    entry: item.entry_price,
-    ltp: item.ltp ?? undefined,
-    exit: item.exit_price ?? undefined,
+    qty: `${qtyOpen}/${qtyTotal}`,
+    avgPrice: avgPrice,
+    entry: entryPrice,
+    ltp: ltp,
+    exit: exitPrice,
     duration: formatDuration(durationSec),
-    brokerage: item.brokerage,
+    brokerage: brokerage,
     slTp: `${item.sl ?? '–'} / ${item.tp ?? '–'}`,
     entryTime: item.entry_time ? new Date(item.entry_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }) : '',
     exitTime: item.exit_time ? new Date(item.exit_time).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }) : undefined,
     settlement: item.settlement ?? undefined,
     status: item.status,
     closed_by: item.closed_by || undefined,
-    settlementAmount: item.settlement_amount ? Math.abs(item.settlement_amount) : undefined,
+    settlementAmount: item.settlement_amount ? Math.abs(Number(item.settlement_amount)) : undefined,
   };
 }
 export function downloadCSV(data: Record<string, unknown>[], filename: string) {

@@ -63,8 +63,8 @@ export default function PayinOutPage({ isDemoMode }: { isDemoMode: boolean }) {
     apiCall(`/api/admin/payinout?${params.toString()}`, { method: 'GET' })
       .then(({ ok, status: httpStatus, data }) => {
         if (httpStatus === 401) { signOut(); return; }
-        if (!ok) { setError((data as any)?.error ?? 'Failed to load'); setRequests([]); return; }
-        setRequests(data as PayRequest[]);
+        const list = Array.isArray(data) ? (data as PayRequest[]) : Array.isArray((data as any)?.requests) ? ((data as any).requests as PayRequest[]) : [];
+        setRequests(list);
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Network error'))
       .finally(() => setLoading(false));

@@ -123,21 +123,33 @@ function makePositionsRequest(userId: string, tab: string): Request {
  * with .range() being the terminal call that resolves the promise.
  */
 function setupPositionsQuery(rows: PositionRow[]): void {
-  // Build a chainable mock object where every method returns itself,
-  // except .range() which returns a promise resolving to { data: rows, error: null }.
   const chain: Record<string, unknown> = {};
 
   const chainable = new Proxy(chain, {
     get(_target, prop: string) {
-      if (prop === 'range') {
+      if (prop === 'range' || prop === 'limit') {
         return () => Promise.resolve({ data: rows, error: null });
       }
-      // All other methods (select, eq, ilike, order) return the same chainable proxy
+      if (prop === 'then') {
+        return (resolve: any) => resolve({ data: rows, error: null });
+      }
       return () => chainable;
     },
   });
 
-  mockFrom.mockReturnValue(chainable);
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'profiles') {
+      const profileChain: any = {
+        select: () => profileChain,
+        eq: () => profileChain,
+        in: () => Promise.resolve({ data: [], error: null }),
+        single: () => Promise.resolve({ data: { role: 'super_admin' }, error: null }),
+        then: (resolve: any) => resolve({ data: [], error: null }),
+      };
+      return profileChain;
+    }
+    return chainable;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +167,7 @@ beforeEach(() => {
     data: {
       user: {
         id: 'admin-user-id',
-        user_metadata: { role: 'admin' },
+        user_metadata: { role: 'super_admin' },
       },
     },
     error: null,

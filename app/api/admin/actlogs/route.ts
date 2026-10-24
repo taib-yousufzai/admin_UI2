@@ -133,10 +133,12 @@ export async function GET(request: Request): Promise<Response> {
       .order('created_at', { ascending: false });
 
     // Pre-fetch profiles to filter by demo mode
-    const { data: allowedProfiles, error: pError } = await adminClient
+    const { data: allProfiles, error: pError } = await adminClient
       .from('profiles')
-      .select('id, email, full_name, client_id')
-      .eq('demo_user', isDemo);
+      .select('id, email, full_name, client_id, demo_user');
+
+    const isDemoProfile = (p: any) => Boolean(p.demo_user || (p.email && p.email.toLowerCase().includes('demo')));
+    const allowedProfiles = (allProfiles ?? []).filter((p: any) => isDemo ? isDemoProfile(p) : !isDemoProfile(p));
 
     const profileMap: Record<string, { email: string; full_name: string | null; client_id?: string }> = {};
     const allowedUserIds: string[] = [];
@@ -217,14 +219,14 @@ export async function GET(request: Request): Promise<Response> {
         target_id: row.target_user_id,
         target_client_id: row.target_user_id && profileMap[row.target_user_id] ? (profileMap[row.target_user_id].client_id || row.target_user_id.slice(0, 8).toUpperCase()) : null,
         symbol: row.symbol,
-        qty: row.qty,
-        price: row.price,
+        qty: row.qty != null ? Number(row.qty) : null,
+        price: row.price != null ? Number(row.price) : null,
         reason: row.reason,
         ip: row.ip ?? '',
-        original_price: row.original_price ?? null,
-        margin_used: row.margin_used ?? null,
-        buffer: row.buffer ?? null,
-        brokerage_value: row.brokerage_value ?? null,
+        original_price: row.original_price != null ? Number(row.original_price) : null,
+        margin_used: row.margin_used != null ? Number(row.margin_used) : null,
+        buffer: row.buffer != null ? Number(row.buffer) : null,
+        brokerage_value: row.brokerage_value != null ? Number(row.brokerage_value) : null,
         brokerage_mode: row.brokerage_mode ?? null,
         trade_mode: row.trade_mode ?? null,
         edited_by: row.edited_by ? formatUser(row.edited_by) : null,

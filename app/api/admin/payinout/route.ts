@@ -52,9 +52,12 @@ export async function GET(request: Request): Promise<Response> {
     const isDemo = demoParam === 'true';
 
     // Fetch all profiles to build a lookup map for user names and client_ids
-    const { data: profiles } = await adminClient.from('profiles').select('id, email, full_name, client_id, bank_name').eq('demo_user', isDemo);
+    const { data: rawProfiles } = await adminClient.from('profiles').select('id, email, full_name, client_id, bank_name, demo_user');
+    const isDemoProfile = (p: any) => Boolean(p.demo_user || (p.email && p.email.toLowerCase().includes('demo')));
+    const profiles = (rawProfiles ?? []).filter((p: any) => isDemo ? isDemoProfile(p) : !isDemoProfile(p));
+
     const profileMap: Record<string, { full_name: string; email: string; client_id: string; bank_name: string }> = {};
-    (profiles ?? []).forEach((p: any) => { profileMap[p.id] = p; });
+    profiles.forEach((p: any) => { profileMap[p.id] = p; });
 
     // Step 3: Build Supabase query ordered by created_at descending
     let query = adminClient
@@ -63,7 +66,7 @@ export async function GET(request: Request): Promise<Response> {
       .order('created_at', { ascending: false });
 
     // Apply allowed userIds
-    const allowedUserIds = (profiles ?? []).map((p: any) => p.id);
+    const allowedUserIds = profiles.map((p: any) => p.id);
     if (allowedUserIds.length > 0) {
       query = query.in('user_id', allowedUserIds);
     } else {
@@ -120,6 +123,7 @@ export async function GET(request: Request): Promise<Response> {
     // Merge profile info into each request
     let merged = (data ?? []).map((r: any) => ({
       ...r,
+      amount: Number(r.amount) || 0,
       user_name: profileMap[r.user_id]?.full_name || profileMap[r.user_id]?.email || r.user_id,
       user_client_id: profileMap[r.user_id]?.client_id || '',
       user_bank_name: bankMap[r.account_no] || profileMap[r.user_id]?.bank_name || '',

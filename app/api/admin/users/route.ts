@@ -41,15 +41,20 @@ export async function GET(request: Request): Promise<Response> {
     if (isBroker) {
       pQuery = pQuery.eq('parent_id', authResult.callerUser.id);
     }
-    if (!fetchAll) {
-      pQuery = pQuery.eq('demo_user', isDemo);
-    }
     
     const { data: profiles, error: pError } = await pQuery;
 
     if (pError) throw pError;
 
-    const targetUserIds = (profiles ?? []).map((p: any) => p.id);
+    // Helper: determine whether a profile is demo
+    const isDemoProfile = (p: any) => Boolean(p.demo_user || (p.email && p.email.toLowerCase().includes('demo')));
+    
+    let scopedProfiles = profiles ?? [];
+    if (!fetchAll) {
+      scopedProfiles = scopedProfiles.filter((p: any) => isDemo ? isDemoProfile(p) : !isDemoProfile(p));
+    }
+
+    const targetUserIds = scopedProfiles.map((p: any) => p.id);
     if (targetUserIds.length === 0) {
       return Response.json([], { status: 200 });
     }
@@ -98,9 +103,12 @@ export async function GET(request: Request): Promise<Response> {
       }
     });
 
-    // 4. Merge stats into profiles
-    const users = (profiles ?? []).map(p => ({
+    // 4. Merge stats into profiles with explicit numeric casting
+    const users = scopedProfiles.map(p => ({
       ...p,
+      balance: Number(p.balance || 0),
+      settlement_amount: Number(p.settlement_amount || 0),
+      demo_user: isDemoProfile(p),
       ...(statsMap[p.id] || { openPnl: 0, m2m: 0, weeklyPnl: 0, marginUsed: 0 })
     }));
 

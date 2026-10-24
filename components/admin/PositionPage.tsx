@@ -236,9 +236,9 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
   const exportToCsv = () => {
     const headers = ['Symbol', 'User', 'Side', 'Status', 'Qty', 'Entry', 'LTP/Exit', 'P&L', 'Time'];
     const r = filtered.map(o => [
-      o.symbol, o.user_id, o.side, o.status, o.qty, o.avgPrice.toFixed(2), 
-      o.status === 'closed' ? (o.exit || 0).toFixed(2) : (o.ltp || 0).toFixed(2),
-      (o.pnl || 0).toFixed(2), o.created_at || ''
+      o.symbol, o.user_id, o.side, o.status, o.qty, Number(o.avgPrice ?? 0).toFixed(2), 
+      o.status === 'closed' ? Number(o.exit || 0).toFixed(2) : Number(o.ltp || 0).toFixed(2),
+      Number(o.pnl || 0).toFixed(2), o.created_at || ''
     ]);
     const csv = [headers, ...r].map(row => row.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -291,9 +291,9 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
       p.side,
       p.status,
       p.qty,
-      p.avgPrice.toFixed(2),
-      p.status === 'closed' ? (p.exit || 0).toFixed(2) : (p.ltp || 0).toFixed(2),
-      (p.pnl || 0).toFixed(2)
+      Number(p.avgPrice ?? 0).toFixed(2),
+      p.status === 'closed' ? Number(p.exit || 0).toFixed(2) : Number(p.ltp || 0).toFixed(2),
+      Number(p.pnl || 0).toFixed(2)
     ]);
     const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -543,22 +543,22 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
           </div>
           <div className="pos-summary-card">
             <div className="pos-card-label">Open P&amp;L</div>
-            <div className={`pos-card-value ${openPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
-              ₹{openPnl.toFixed(2)}
+            <div className={`pos-card-value ${Number(openPnl || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{Number(openPnl || 0).toFixed(2)}
             </div>
             <div className="pos-card-sub">unrealized</div>
           </div>
           <div className="pos-summary-card">
             <div className="pos-card-label">Ledger</div>
-            <div className={`pos-card-value ${ledger >= 0 ? 'pos-green' : 'pos-red'}`}>
-              ₹{ledger.toFixed(2)}
+            <div className={`pos-card-value ${Number(ledger || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{Number(ledger || 0).toFixed(2)}
             </div>
             <div className="pos-card-sub">{timeframe}</div>
           </div>
           <div className="pos-summary-card">
             <div className="pos-card-label">Closed P&amp;L</div>
-            <div className={`pos-card-value ${closedPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
-              ₹{closedPnl.toFixed(2)}
+            <div className={`pos-card-value ${Number(closedPnl || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+              ₹{Number(closedPnl || 0).toFixed(2)}
             </div>
             <div className="pos-card-sub">realized</div>
           </div>
@@ -636,14 +636,14 @@ export default function PositionPage({ selectedUser, onOpenUserPanel, isDemoMode
                     <div className="pos-user-stats">
                       <div className="pos-stat-item">
                         <span className="pos-stat-label">Open P&amp;L</span>
-                        <span className={`pos-stat-value ${userOpenPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
-                          ₹{userOpenPnl.toFixed(2)}
+                        <span className={`pos-stat-value ${Number(userOpenPnl || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+                          ₹{Number(userOpenPnl || 0).toFixed(2)}
                         </span>
                       </div>
                       <div className="pos-stat-item">
                         <span className="pos-stat-label">Closed P&amp;L</span>
-                        <span className={`pos-stat-value ${userClosedPnl >= 0 ? 'pos-green' : 'pos-red'}`}>
-                          ₹{userClosedPnl.toFixed(2)}
+                        <span className={`pos-stat-value ${Number(userClosedPnl || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+                          ₹{Number(userClosedPnl || 0).toFixed(2)}
                         </span>
                       </div>
                     </div>
@@ -841,8 +841,8 @@ function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReope
                   </td>
                 )}
                 <td data-label="P&L">
-                  <span className={`pos-pl-val ${pnl >= 0 ? 'pos-green' : 'pos-red'}`}>
-                    ₹{pnl.toFixed(2)}
+                  <span className={`pos-pl-val ${Number(pnl || 0) >= 0 ? 'pos-green' : 'pos-red'}`}>
+                    ₹{Number(pnl || 0).toFixed(2)}
                   </span>
                 </td>
                 <td data-label="Symbol">
@@ -860,10 +860,10 @@ function PositionTable({ positions, showUser, onEdit, onDelete, onSqoff, onReope
                   <div className="pos-sub-text">{p.status}</div>
                 </td>
                 <td data-label="Qty">{p.qty}</td>
-                <td data-label="Avg Price">{p.avgPrice.toFixed(2)}</td>
+                <td data-label="Avg Price">{Number(p.avgPrice ?? 0).toFixed(2)}</td>
                 <td data-label="LTP / Exit">
                   <span className="pos-val-badge">
-                    {p.status === 'closed' ? (p.exit ?? 0).toFixed(2) : (p.ltp ?? 0).toFixed(2)}
+                    {p.status === 'closed' ? Number(p.exit ?? 0).toFixed(2) : Number(p.ltp ?? 0).toFixed(2)}
                   </span>
                 </td>
                 <td data-label="Brok / Settlem.">

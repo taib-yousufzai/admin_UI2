@@ -99,18 +99,20 @@ export default function AdminRiskBar({ isDemoMode, onTriggerToast }: {
     }
   };
 
-  const fmtCurrency = (val: number) => {
-    const abs = Math.abs(val);
-    const sign = val < 0 ? '-' : '+';
+  const fmtCurrency = (val: number | string) => {
+    const num = Number(val || 0);
+    const abs = Math.abs(num);
+    const sign = num < 0 ? '-' : '+';
     if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)} Cr`;
     if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(2)} L`;
     return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
   };
 
-  const fmtMargin = (val: number) => {
-    if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
-    if (val >= 100000) return `₹${(val / 100000).toFixed(2)} L`;
-    return `₹${val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  const fmtMargin = (val: number | string) => {
+    const num = Number(val || 0);
+    if (num >= 10000000) return `₹${(num / 10000000).toFixed(2)} Cr`;
+    if (num >= 100000) return `₹${(num / 100000).toFixed(2)} L`;
+    return `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
   };
 
   const isProfit = metrics.totalMtm >= 0;

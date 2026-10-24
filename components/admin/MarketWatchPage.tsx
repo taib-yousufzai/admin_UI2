@@ -240,7 +240,7 @@ export default function MarketWatchPage() {
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 600, color: changeColor }}>{fmt(q?.lastPrice)}</td>
                     <td style={{ textAlign: 'right', color: changeColor, fontWeight: 500 }}>
-                      {q ? `${change > 0 ? '+' : ''}${change.toFixed(2)} (${q.changePercent}%)` : '—'}
+                      {q ? `${change > 0 ? '+' : ''}${Number(change || 0).toFixed(2)} (${q.changePercent}%)` : '—'}
                     </td>
                     <td style={{ textAlign: 'right' }}>{fmt(q?.bid)}</td>
                     <td style={{ textAlign: 'right' }}>{fmt(q?.ask)}</td>

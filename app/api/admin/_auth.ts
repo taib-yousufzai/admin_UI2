@@ -1,20 +1,19 @@
 /**
  * Shared admin authentication helper.
  * Used by all /api/admin/* route handlers to validate the caller's identity
- * and assert they hold the admin or super_admin role.
+ * and assert they hold the admin, super_admin, or broker role.
  */
 
-import { getRole } from '../../../lib/auth';
 import { requireAuth } from '../../../lib/api-middleware';
-import { getAdminClient } from '../../../lib/adminClient';
 
 export interface AdminContext {
   adminClient: any;
   callerUser: any;
+  role: string;
 }
 
 /**
- * Validates the Bearer token and asserts the caller is admin, super_admin, or broker.
+ * Validates the Bearer token and asserts the caller is admin, super_admin, broker, or sub_broker.
  */
 export async function requireAdmin(
   request: Request,
@@ -23,12 +22,13 @@ export async function requireAdmin(
   if (authResult instanceof Response) return authResult;
   
   const { adminClient, callerUser, callerRole } = authResult;
+  const role = (callerRole || '').toLowerCase();
 
-  if (callerRole !== 'admin' && callerRole !== 'super_admin' && callerRole !== 'broker') {
+  if (!['admin', 'super_admin', 'broker', 'sub_broker'].includes(role)) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  return { adminClient, callerUser };
+  return { adminClient, callerUser, role };
 }
 
 /**
@@ -41,10 +41,11 @@ export async function requireSuperAdmin(
   if (authResult instanceof Response) return authResult;
   
   const { adminClient, callerUser, callerRole } = authResult;
+  const role = (callerRole || '').toLowerCase();
 
-  if (callerRole !== 'super_admin') {
+  if (role !== 'super_admin') {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  return { adminClient, callerUser };
+  return { adminClient, callerUser, role };
 }

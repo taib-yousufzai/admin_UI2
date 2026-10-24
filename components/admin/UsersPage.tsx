@@ -15,29 +15,35 @@ type UserRow = {
 };
 
 function mapUserListItem(u: UserListItem): UserRow {
+  const balance = Number(u.balance || 0);
+  const openPnl = Number(u.openPnl || 0);
+  const m2m = Number(u.m2m || 0);
+  const weeklyPnl = Number(u.weeklyPnl || 0);
+  const marginUsed = Number(u.marginUsed || 0);
+  const settlementAmount = Number(u.settlement_amount || 0);
   return {
     id: u.id,
     client_id: u.client_id,
     fullName: u.full_name ?? u.email,
-    role: u.role.toLowerCase(),
+    role: (u.role || '').toLowerCase(),
     active: u.active,
-    ledgerBal: u.balance,
-    mAvailable: (u.balance + (u.openPnl ?? 0)) - (u.marginUsed ?? 0),
-    openPnl: u.openPnl ?? 0,
-    m2m: u.m2m ?? 0,
-    weeklyPnl: u.weeklyPnl ?? 0,
-    marginUsed: u.marginUsed ?? 0,
+    ledgerBal: balance,
+    mAvailable: (balance + openPnl) - marginUsed,
+    openPnl,
+    m2m,
+    weeklyPnl,
+    marginUsed,
     broker: u.parent_id ?? 'DIRECT',
     mobile: u.phone ?? 'N/A',
     scheduled_delete_at: u.scheduled_delete_at,
     segments: u.segments ?? [],
     read_only: u.read_only,
-    demo_user: u.demo_user,
+    demo_user: Boolean(u.demo_user || (u.email && u.email.toLowerCase().includes('demo'))),
     intraday_sq_off: u.intraday_sq_off,
     auto_sqoff: u.auto_sqoff,
     showcase_auto_sqoff: (u as any).showcase_auto_sqoff ?? 85,
     sqoff_method: u.sqoff_method,
-    settlementAmount: u.settlement_amount ?? 0,
+    settlementAmount,
   };
 }
 
@@ -161,7 +167,7 @@ export default function UsersPage({ selectedUser: _selectedUser, onSelectUser, o
   const totalPages = Math.max(1, Math.ceil(filtered.length / rowsNum));
   const displayed = filtered.slice((page - 1) * rowsNum, page * rowsNum);
 
-  const fmt = (n: number | null | undefined) => (n ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n: number | string | null | undefined) => (Number(n ?? 0)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   return (
     <div className="usr-root">

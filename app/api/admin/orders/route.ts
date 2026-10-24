@@ -1,111 +1,142 @@
-/**
- * GET  /api/admin/orders  — list all orders platform-wide (with filters)
- * POST /api/admin/orders/square-off-all — force-close all open positions
- * POST /api/admin/orders/cancel-all     — cancel all pending LIMIT orders
- */
-
+import { NextResponse } from 'next/server';
 import { requireAdmin } from '../_auth';
+import { sanitizeOrderInfo } from '@/lib/trading/orderSanitizer';
 
-export async function GET(request: Request): Promise<Response> {
+export const dynamic = 'force-dynamic';
+
+export async function GET(request: Request): Promise<NextResponse> {
+  const auth = await requireAdmin(request);
+  if (auth instanceof Response) return auth as NextResponse;
+
+  const { adminClient, callerUser, role } = auth;
+  const { searchParams } = new URL(request.url);
+
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+  const limit = Math.min(500, Math.max(1, parseInt(searchParams.get('rows') || searchParams.get('limit') || '50', 10)));
+  const userId = searchParams.get('user_id') || searchParams.get('uid');
+  const statusParam = searchParams.get('status');
+  const tab = (searchParams.get('tab') || '').toLowerCase();
+  const search = searchParams.get('search')?.trim();
+  const dateFrom = searchParams.get('dateFrom') || searchParams.get('date_from');
+  const dateTo = searchParams.get('dateTo') || searchParams.get('date_to');
+  const isDemo = searchParams.get('demo') === 'true';
+
+  const offset = (page - 1) * limit;
+
   try {
-    const authResult = await requireAdmin(request);
-    if (authResult instanceof Response) return authResult;
-    const { adminClient } = authResult;
-
-    const url = new URL(request.url);
-    const tab        = url.searchParams.get('tab') ?? null;
-    const search     = url.searchParams.get('search') ?? null;
-    const dateFrom   = url.searchParams.get('dateFrom') ?? null;
-    const dateTo     = url.searchParams.get('dateTo') ?? null;
-    const rowsParam  = url.searchParams.get('rows') ?? null;
-    const pageParam  = url.searchParams.get('page') ?? '1';
-    const demoParam  = url.searchParams.get('demo');
-    const isDemo     = demoParam === 'true';
-    const rows       = rowsParam ? Math.min(parseInt(rowsParam, 10), 500) : 50;
-    const page       = Math.max(1, parseInt(pageParam, 10));
-
-    // Fetch all profiles for user name/client_id lookup
-    const { data: profiles } = await adminClient.from('profiles').select('id, email, full_name, client_id').eq('demo_user', isDemo);
-    const profileMap: Record<string, { full_name: string; email: string; client_id: string }> = {};
-    (profiles ?? []).forEach((p: any) => { profileMap[p.id] = p; });
+    const { getDescendantUserIds } = await import('@/lib/hierarchy');
+    const allowedUserIds = await getDescendantUserIds(adminClient, callerUser.id, role);
 
     let query = adminClient
       .from('orders')
-      .select('id, user_id, symbol, side, status, qty, price, order_type, info, created_at', { count: 'exact' })
-      .order('created_at', { ascending: false });
+      .select('id, user_id, symbol, side, status, order_type, product_type, qty, lots, fill_price, price, brokerage, info, created_at', { count: 'exact' });
 
-    if (tab === 'executed') {
-      query = query.eq('status', 'EXECUTED');
-    } else if (tab === 'limit') {
-      query = query.eq('status', 'CANCELLED').eq('order_type', 'LIMIT');
-    } else if (tab === 'rejected') {
-      query = query.eq('status', 'REJECTED');
-    } else if (tab === 'pending') {
-      query = query.eq('status', 'PENDING').eq('order_type', 'LIMIT');
+    if (allowedUserIds !== null) {
+      if (allowedUserIds.length === 0) {
+        return NextResponse.json({ orders: [], total: 0 });
+      }
+      query = query.in('user_id', allowedUserIds);
     }
 
-    // If search looks like a user name or client_id (not a symbol), resolve matching user_ids first
-    let userIdFilter: string[] | null = null;
+    // Demo filtering: match reference admin behavior
+    const { data: demoProfiles } = await adminClient
+      .from('profiles')
+      .select('id')
+      .or('demo_user.eq.true,email.ilike.%demo%');
+    const demoUserIds = (demoProfiles || []).map((p: any) => p.id);
+
+    if (isDemo) {
+      if (demoUserIds.length === 0) {
+        return NextResponse.json({ orders: [], total: 0 });
+      }
+      query = query.in('user_id', demoUserIds);
+    } else if (demoUserIds.length > 0) {
+      query = query.not('user_id', 'in', demoUserIds);
+    }
+
+    if (userId && userId !== 'all') query = query.eq('user_id', userId);
+
+    if (statusParam) {
+      query = query.eq('status', statusParam);
+    } else if (tab) {
+      if (tab === 'pending') {
+        query = query.in('status', ['PENDING', 'TRIGGER_PENDING', 'OPEN', 'SUBMITTING']);
+      } else if (tab === 'executed') {
+        query = query.in('status', ['EXECUTED', 'COMPLETE', 'FILLED']);
+      } else if (tab === 'limit') {
+        query = query.in('status', ['CANCELLED', 'CANCELED']);
+      } else if (tab === 'rejected') {
+        query = query.in('status', ['REJECTED']);
+      }
+    }
+
     if (search) {
-      const q = search.toLowerCase();
-      // Check if any profile matches by name or client_id
-      const matchingUserIds = (profiles ?? [])
-        .filter((p: any) =>
-          (p.full_name && p.full_name.toLowerCase().includes(q)) ||
-          (p.client_id && p.client_id.toLowerCase().includes(q)) ||
-          (p.email && p.email.toLowerCase().includes(q))
-        )
-        .map((p: any) => p.id);
-
-      if (matchingUserIds.length > 0) {
-        // Search matches user profiles — filter by those user_ids OR by symbol
-        userIdFilter = matchingUserIds;
-        query = query.or(`symbol.ilike.%${search}%,user_id.in.(${matchingUserIds.join(',')})`);
-      } else {
-        // No profile match — just search by symbol as before, but still restrict to demo/live users
-        query = query.ilike('symbol', `%${search}%`);
-      }
-    }
-    
-    // Ensure we only fetch orders for users matching the demo environment
-    if (!userIdFilter) {
-      const allowedUserIds = (profiles ?? []).map((p: any) => p.id);
-      if (allowedUserIds.length > 0) {
-        query = query.in('user_id', allowedUserIds);
-      } else {
-        return Response.json({ orders: [], total: 0 }, { status: 200 });
-      }
+      query = query.or(`symbol.ilike.%${search}%,id.ilike.%${search}%`);
     }
 
     if (dateFrom) {
       query = query.gte('created_at', dateFrom);
     }
     if (dateTo) {
-      // Add 1 day so "to" date is inclusive
       const toDate = new Date(dateTo);
-      toDate.setDate(toDate.getDate() + 1);
-      query = query.lt('created_at', toDate.toISOString());
+      toDate.setHours(23, 59, 59, 999);
+      query = query.lte('created_at', toDate.toISOString());
     }
 
-    const from = (page - 1) * rows;
-    const to   = from + rows - 1;
-    query = query.range(from, to);
-
-    const { data, error, count } = await query;
+    const { data, count, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
 
     if (error) {
-      return Response.json({ error: 'Internal server error' }, { status: 500 });
+      console.error('[GET /api/admin/orders] Error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Merge profile info into each order
-    const merged = (data ?? []).map((r: any) => ({
-      ...r,
-      user_name: profileMap[r.user_id]?.full_name || profileMap[r.user_id]?.email || r.user_id,
-      user_client_id: profileMap[r.user_id]?.client_id || '',
-    }));
+    const rawList = data ?? [];
+    const uniqueUserIds = [...new Set(rawList.map((o: any) => o.user_id).filter(Boolean))];
+    const profilesMap: Record<string, any> = {};
+    if (uniqueUserIds.length > 0) {
+      const { data: profs } = await adminClient
+        .from('profiles')
+        .select('id, client_id, full_name, email')
+        .in('id', uniqueUserIds);
+      if (profs) {
+        for (const p of profs) {
+          profilesMap[p.id] = p;
+        }
+      }
+    }
 
-    return Response.json({ orders: merged, total: count ?? 0 }, { status: 200 });
-  } catch {
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
+    const orders = rawList.map((o: any) => {
+      const prof = profilesMap[o.user_id];
+      const sanitizedInfo = sanitizeOrderInfo(o.info);
+      return {
+        id: o.id,
+        user_id: o.user_id,
+        user_name: prof?.full_name || prof?.email || '',
+        user_client_id: prof?.client_id || '',
+        symbol: o.symbol,
+        side: (o.side || 'BUY').toUpperCase(),
+        status: (o.status || 'EXECUTED').toUpperCase(),
+        orderType: o.order_type || 'MARKET',
+        order_type: o.order_type || 'MARKET',
+        product_type: o.product_type,
+        qty: Number(o.qty || 1),
+        lots: Number(o.lots || 1),
+        price: Number(o.fill_price || o.price || 0),
+        fill_price: Number(o.fill_price || o.price || 0),
+        brokerage: Number(o.brokerage || 0),
+        info: sanitizedInfo || o.info || '—',
+        time: o.created_at,
+        created_at: o.created_at,
+      };
+    });
+
+    return NextResponse.json({
+      orders,
+      total: count ?? orders.length,
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }

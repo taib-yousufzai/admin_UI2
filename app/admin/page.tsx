@@ -61,13 +61,19 @@ export default function AdminPage() {
   );
 
   useEffect(() => {
-    getSession().then((session) => {
-      if (!session) {
+    getSession().then((sessionRes: any) => {
+      const session = sessionRes?.data?.session || sessionRes?.session || sessionRes;
+      if (!session || !session.user) {
         router.replace('/login');
         return;
       }
       const role = getRole(session.user);
       if (role !== 'admin' && role !== 'super_admin' && role !== 'broker' && role !== 'sub_broker') {
+        clearAdminAuthCache();
+        try {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+        } catch {}
         router.replace('/login');
         return;
       }

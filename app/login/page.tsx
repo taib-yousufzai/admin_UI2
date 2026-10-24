@@ -1,268 +1,261 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { signIn, getSession, getRole } from '@/lib/auth';
-import AnimatedLoader from '@/components/AnimatedLoader';
-import './page.css';
 
-export default function LoginPage() {
+export default function AdminLoginPage() {
   const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Apply active theme on mount — same pattern as all other pages
+  // Auto-redirect if already logged in so admin doesn't have to re-login every time
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('marginApexTheme');
-      document.body.classList.remove('dark', 'black', 'blue');
-      if (saved === 'dark' || saved === 'black' || saved === 'blue') {
-        document.body.classList.add(saved);
+      const token = localStorage.getItem('auth_token');
+      const userStr = localStorage.getItem('auth_user');
+      if (token && userStr) {
+        const user = JSON.parse(userStr);
+        const role = (user.role || user.user_metadata?.role || '').toLowerCase();
+        if (role === 'admin' || role === 'super_admin' || role === 'broker' || role === 'sub_broker') {
+          router.replace('/admin');
+        }
       }
-    } catch {
-      // localStorage unavailable — proceed without theme
-    }
-  }, []);
-
-  // Form state
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [usernameError, setUsernameError] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [formError, setFormError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-
-  const [showPopups, setShowPopups] = useState(false);
-  const [pendingRoute, setPendingRoute] = useState<string | null>(null);
-
-  const isLoggingInRef = useRef(false);
-
-  // Redirect based on role if already authenticated
-  useEffect(() => {
-    getSession().then((session) => {
-      if (session && !isLoggingInRef.current) {
-        router.replace('/admin');
-      }
-    });
+    } catch {}
   }, [router]);
 
-  const handleUsernameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setUsername(e.target.value);
-    setUsernameError('');
-    setFormError('');
-  };
-
-  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setPassword(e.target.value);
-    setPasswordError('');
-    setFormError('');
-  };
-
-  const handleDemoLogin = async () => {
-    setUsername('demo@gmail.com');
-    setPassword('demo123');
-    setUsernameError('');
-    setPasswordError('');
-    setFormError('');
-    setIsLoading(true);
-    isLoggingInRef.current = true;
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  const handleQuickAdminLogin = async () => {
+    setError(null);
+    setLoading(true);
+    setEmail('admin@gmail.com');
+    setPassword('••••••••');
 
     try {
-      const result = await signIn('demo@gmail.com', 'demo123');
+      const res = await fetch('/api/admin/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'admin@gmail.com', password: 'admin' }),
+      });
 
-      if (!result.error) {
-        router.replace('/admin');
-        setIsLoading(false);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error || 'Quick login failed');
+        setLoading(false);
+        return;
+      }
+
+      if (data.session?.access_token) {
+        localStorage.setItem('auth_token', data.session.access_token);
+        localStorage.setItem('auth_user', JSON.stringify(data.user));
+        window.location.href = '/admin';
       } else {
-        setFormError('Demo account unavailable. Please try again later.');
-        setIsLoading(false);
+        setError('No access token received');
       }
     } catch (err: any) {
-      console.error('Demo login error:', err);
-      setFormError(err.message || 'An unexpected error occurred. Please try again.');
-      setIsLoading(false);
+      setError(err?.message || 'Network error occurred');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSubmit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-
-    // Validate empty fields first — do NOT call validateCredentials (Requirement 3.5)
-    let hasError = false;
-    if (!username) {
-      setUsernameError('Email or username is required');
-      hasError = true;
-    }
-    if (!password) {
-      setPasswordError('Password is required');
-      hasError = true;
-    }
-    if (hasError) return;
-
-    setIsLoading(true);
-    setFormError('');
-    isLoggingInRef.current = true;
-
-    // Small async tick so the loading state renders before the credential check
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
 
     try {
-      const result = await signIn(username, password);
+      const res = await fetch('/api/admin/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
 
-      if (!result.error) {
-        router.replace('/admin');
-        setIsLoading(false);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error || 'Login failed');
+        setLoading(false);
+        return;
+      }
+
+      if (data.session?.access_token) {
+        localStorage.setItem('auth_token', data.session.access_token);
+        localStorage.setItem('auth_user', JSON.stringify(data.user));
+        window.location.href = '/admin';
       } else {
-        setFormError('Invalid credentials. Please try again.');
-        setIsLoading(false);
+        setError('No access token received');
       }
     } catch (err: any) {
-      console.error('Login error:', err);
-      setFormError(err.message || 'An unexpected error occurred. Please try again.');
-      setIsLoading(false);
+      setError(err?.message || 'Network error occurred');
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="login-page">
-      {/* Branding — matches nav bar style (Requirement 1.3) */}
-      <div className="login-branding">
-        <span className="login-brand-margin">MARGIN</span>
-        <span className="login-brand-apex">APEX</span>
-      </div>
+    <div
+      style={{
+        minHeight: '100dvh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#0B0E14',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        padding: '1.5rem',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '400px',
+          background: '#151921',
+          border: '1px solid #262B36',
+          borderRadius: '12px',
+          padding: '2rem',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        }}
+      >
+        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '48px',
+              height: '48px',
+              borderRadius: '10px',
+              background: 'rgba(0, 200, 83, 0.1)',
+              color: '#00C853',
+              marginBottom: '1rem',
+              fontSize: '1.25rem',
+            }}
+          >
+            <i className="fas fa-shield-alt" />
+          </div>
+          <h1 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#FFFFFF', margin: 0 }}>
+            MARGIN<span style={{ color: '#00C853' }}>APEX</span>
+          </h1>
+          <p style={{ fontSize: '0.82rem', color: '#8A92A6', marginTop: '0.35rem' }}>
+            Administrative Control Panel
+          </p>
+        </div>
 
-      {/* Auth card */}
-      <div className="login-card">
-        <h1 className="login-card-title">Sign in</h1>
-        <p className="login-card-subtitle">Enter your credentials to continue</p>
+        {error && (
+          <div
+            style={{
+              padding: '0.75rem 1rem',
+              borderRadius: '8px',
+              background: 'rgba(239, 68, 68, 0.1)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              color: '#EF4444',
+              fontSize: '0.82rem',
+              marginBottom: '1.25rem',
+            }}
+          >
+            {error}
+          </div>
+        )}
 
-        {/* form onSubmit handles Enter-key submission (Requirement 7.3) */}
-        <form className="login-form" onSubmit={handleSubmit} noValidate>
-
-          {/* Email / Username field (Requirement 2.1) */}
-          <div className="login-field-group">
-            <label htmlFor="username" className="login-label">
-              Email / Username
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#C5CAD6', marginBottom: '0.4rem' }}>
+              Email or Admin ID
             </label>
-            <div className={`login-input-wrapper${usernameError ? ' login-input-error' : ''}`}>
-              <span className="login-input-icon">
-                <i className="fas fa-envelope"></i>
-              </span>
-              <input
-                id="username"
-                type="text"
-                className="login-input"
-                value={username}
-                onChange={handleUsernameChange}
-                autoComplete="username"
-                autoCapitalize="none"
-                spellCheck={false}
-                disabled={isLoading}
-                suppressHydrationWarning
-              />
-            </div>
-            {usernameError && (
-              <span className="login-field-error" role="alert">
-                {usernameError}
-              </span>
-            )}
+            <input
+              type="text"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="admin@example.com"
+              style={{
+                width: '100%',
+                padding: '0.7rem 0.9rem',
+                borderRadius: '8px',
+                background: '#0D1117',
+                border: '1px solid #2B313E',
+                color: '#FFFFFF',
+                fontSize: '0.88rem',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
           </div>
 
-          {/* Password field (Requirement 2.2) */}
-          <div className="login-field-group">
-            <label htmlFor="password" className="login-label">
+          <div>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#C5CAD6', marginBottom: '0.4rem' }}>
               Password
             </label>
-            <div className={`login-input-wrapper${passwordError ? ' login-input-error' : ''}`}>
-              <span className="login-input-icon">
-                <i className="fas fa-lock"></i>
-              </span>
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                className="login-input"
-                value={password}
-                onChange={handlePasswordChange}
-                autoComplete="current-password"
-                disabled={isLoading}
-                suppressHydrationWarning
-              />
-              {/* Password visibility toggle (Requirement 2.3) */}
-              <button
-                type="button"
-                className="login-toggle-password"
-                onClick={() => setShowPassword((v) => !v)}
-                tabIndex={-1}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                <i className={showPassword ? 'fas fa-eye-slash' : 'fas fa-eye'}></i>
-              </button>
-            </div>
-            {passwordError && (
-              <span className="login-field-error" role="alert">
-                {passwordError}
-              </span>
-            )}
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              style={{
+                width: '100%',
+                padding: '0.7rem 0.9rem',
+                borderRadius: '8px',
+                background: '#0D1117',
+                border: '1px solid #2B313E',
+                color: '#FFFFFF',
+                fontSize: '0.88rem',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
           </div>
 
-          {/* Forgot password link (Requirement 1.1, 1.2, 1.3, 1.4) */}
-          <p className="login-signup-link" style={{ marginTop: '-8px' }}>
-            <a href="/forgot-password">Forgot password?</a>
-          </p>
-
-          {/* Form-level error (Requirement 3.3) */}
-          {formError && (
-            <div className="login-form-error" role="alert">
-              <i className="fas fa-circle-exclamation"></i>
-              {' '}{formError}
-            </div>
-          )}
-
-          {/* Submit button (Requirements 4.5, 7.4) */}
           <button
             type="submit"
-            className="login-submit-btn"
-            disabled={isLoading}
-            aria-label="Log in to Margin Apex"
-            suppressHydrationWarning
+            disabled={loading}
+            style={{
+              marginTop: '0.5rem',
+              padding: '0.75rem',
+              borderRadius: '8px',
+              background: '#00C853',
+              color: '#000000',
+              fontWeight: 700,
+              fontSize: '0.9rem',
+              border: 'none',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1,
+              transition: 'opacity 0.2s',
+            }}
           >
-            {isLoading ? (
-              <>
-                <AnimatedLoader size="small" />
-                {' '}Signing in…
-              </>
-            ) : (
-              'Sign in'
-            )}
+            {loading ? 'Authenticating...' : 'Sign In to Admin'}
           </button>
 
           {/* Divider */}
-          <div className="login-divider">
-            <span className="login-divider-line" />
-            <span className="login-divider-text">or</span>
-            <span className="login-divider-line" />
+          <div style={{ display: 'flex', alignItems: 'center', margin: '0.3rem 0', gap: '0.8rem' }}>
+            <div style={{ flex: 1, height: '1px', background: '#262B36' }} />
+            <span style={{ fontSize: '0.75rem', color: '#8A92A6', textTransform: 'uppercase' }}>or</span>
+            <div style={{ flex: 1, height: '1px', background: '#262B36' }} />
           </div>
 
-          {/* Demo login */}
+          {/* Quick Demo Admin Login */}
           <button
             type="button"
-            className="login-demo-btn"
-            disabled={isLoading}
-            onClick={handleDemoLogin}
-            aria-label="Sign in with demo account"
+            disabled={loading}
+            onClick={handleQuickAdminLogin}
+            style={{
+              padding: '0.75rem',
+              borderRadius: '8px',
+              background: 'rgba(88, 166, 255, 0.1)',
+              border: '1px solid rgba(88, 166, 255, 0.3)',
+              color: '#58a6ff',
+              fontWeight: 700,
+              fontSize: '0.9rem',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'all 0.2s',
+            }}
           >
-            <i className="fas fa-flask"></i>
-            {' '}Try Demo Account
+            <i className="fas fa-bolt" /> ⚡ 1-Click Demo Admin Login
           </button>
         </form>
-
-        <p className="login-signup-link">
-          Don&apos;t have an account?
-        </p>
-        <a href="/register" className="login-create-btn">
-          Create your account
-        </a>
       </div>
     </div>
   );

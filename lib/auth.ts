@@ -193,7 +193,8 @@ export async function getSession(): Promise<Session | null> {
         if (!user) {
           try {
             const payload = JSON.parse(atob(token.split('.')[1]));
-            user = { id: payload.sub, email: payload.email, user_metadata: payload.user_metadata || { role: payload.role } };
+            const r = payload.user_metadata?.role || payload.role;
+            user = { id: payload.sub, email: payload.email, role: r, user_metadata: payload.user_metadata || { role: r } };
           } catch {}
         }
         return {
@@ -224,16 +225,15 @@ export async function getSession(): Promise<Session | null> {
       }
 
       // Refresh user data from server to get latest user_metadata (e.g. role)
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      
-      if (userError) {
-        console.warn('getUser() failed, treating session as invalid:', userError.message);
-        _cachedSession = null;
-        _cacheTimestamp = 0;
-        return null;
-      }
+      let user = sessionData.session.user;
+      try {
+        const { data: userData, error: userError } = await supabase.auth.getUser();
+        if (!userError && userData?.user) {
+          user = userData.user;
+        }
+      } catch {}
 
-      const freshSession = { ...sessionData.session, user: userData.user };
+      const freshSession = { ...sessionData.session, user };
 
       _cachedSession = freshSession;
       _cacheTimestamp = Date.now();

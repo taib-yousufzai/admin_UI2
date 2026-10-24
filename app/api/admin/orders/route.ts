@@ -51,7 +51,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       }
       query = query.in('user_id', demoUserIds);
     } else if (demoUserIds.length > 0) {
-      query = query.not('user_id', 'in', demoUserIds);
+      query = query.not('user_id', 'in', `(${demoUserIds.join(',')})`);
     }
 
     if (userId && userId !== 'all') query = query.eq('user_id', userId);

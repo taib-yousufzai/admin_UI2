@@ -131,8 +131,11 @@ export async function getDescendantUserIds(
     return [actorId];
   }
 
-  // Recursive search strictly down the tree from actorId
+  // Recursive search strictly down the tree from actorId with cycle protection
+  const visited = new Set<string>();
   const getChildren = (parentId: string): string[] => {
+    if (visited.has(parentId)) return [];
+    visited.add(parentId);
     const directChildren = (allProfiles as any[]).filter(p => p.parent_id === parentId);
     
     // Strict isolation: filter out any prohibited cross-tenant roles

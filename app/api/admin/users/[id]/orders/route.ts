@@ -65,7 +65,7 @@ export async function GET(
       }
       query = query.in('user_id', demoUserIds);
     } else if (demoUserIds.length > 0) {
-      query = query.not('user_id', 'in', demoUserIds);
+      query = query.not('user_id', 'in', `(${demoUserIds.join(',')})`);
     }
 
     if (statusParam) {

@@ -182,6 +182,14 @@ export async function getAdminAuthToken(): Promise<string> {
     return cachedToken;
   }
   try {
+    if (typeof window !== 'undefined') {
+      const direct = localStorage.getItem('auth_token');
+      if (direct) {
+        cachedToken = direct;
+        tokenExpiry = now + 86400000;
+        return direct;
+      }
+    }
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token ?? '';
     cachedToken = token;

@@ -25,20 +25,17 @@ export type PasswordResetResult =
  * All valid application roles.
  * Stored in user.user_metadata.role.
  */
-export type AppRole = 'super_admin' | 'admin' | 'broker' | 'user';
+export type AppRole = 'super_admin' | 'admin' | 'broker' | 'sub_broker' | 'user';
 
-/**
- * Returns the role of the given Supabase user.
- * Uses strict equality checks for each of the four known role strings.
- * Returns 'user' for all other inputs (null user, missing field, any other value).
- *
- * Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 1.6
- */
 export function getRole(user: User | null): AppRole {
-  const role = user?.user_metadata?.role;
-  if (role === 'super_admin') return 'super_admin';
-  if (role === 'admin') return 'admin';
-  if (role === 'broker') return 'broker';
+  const r = (user?.user_metadata?.role || (user as any)?.role || user?.app_metadata?.role || '')
+    .toString()
+    .toLowerCase()
+    .trim();
+  if (r === 'super_admin') return 'super_admin';
+  if (r === 'admin') return 'admin';
+  if (r === 'broker') return 'broker';
+  if (r === 'sub_broker') return 'sub_broker';
   return 'user';
 }
 

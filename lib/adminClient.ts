@@ -121,9 +121,14 @@ export class RailwayQueryBuilder {
   not(col: string, op: string, val: any) {
     if (op === 'is' && (val === null || val === undefined)) {
       this.whereClauses.push(`"${col}" IS NOT NULL`);
-    } else if (op === 'in' && Array.isArray(val)) {
-      if (val.length === 0) return this;
-      const idxs = val.map((v) => {
+    } else if (op === 'in') {
+      const items = Array.isArray(val)
+        ? val
+        : typeof val === 'string'
+        ? val.replace(/[()]/g, '').split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      if (items.length === 0) return this;
+      const idxs = items.map((v) => {
         this.params.push(v);
         return `$${this.params.length}`;
       });

@@ -127,7 +127,7 @@ export async function GET(request: Request): Promise<Response> {
     // Step 4: Query positions for all users in the date range
     let positionsQuery = adminClient
       .from('positions')
-      .select('user_id, pnl, brokerage, settlement_amount, settlement')
+      .select('user_id, pnl, brokerage, settlement')
       .in('user_id', targetUserIds);
 
     if (dateFrom) {

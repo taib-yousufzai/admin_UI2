@@ -67,8 +67,8 @@ export default function AdminPage() {
         return;
       }
       const role = getRole(session.user);
-      if (role !== 'admin' && role !== 'super_admin') {
-        router.replace('/');
+      if (role !== 'admin' && role !== 'super_admin' && role !== 'broker' && role !== 'sub_broker') {
+        router.replace('/login');
         return;
       }
       setUserRole(role);

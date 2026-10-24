@@ -40,8 +40,7 @@ export default function LoginPage() {
   useEffect(() => {
     getSession().then((session) => {
       if (session && !isLoggingInRef.current) {
-        const role = getRole(session.user);
-        router.replace(role === 'admin' ? '/admin' : '/');
+        router.replace('/admin');
       }
     });
   }, [router]);
@@ -73,16 +72,7 @@ export default function LoginPage() {
       const result = await signIn('demo@gmail.com', 'demo123');
 
       if (!result.error) {
-        const role = getRole(result.user ?? null);
-        const isAdmin = role === 'admin' || role === 'super_admin';
-        const route = isAdmin ? '/admin' : '/';
-        
-        if (isAdmin || result.user?.email === 'demo@gmail.com') {
-          router.replace(route);
-        } else {
-          setPendingRoute(route);
-          setShowPopups(true);
-        }
+        router.replace('/admin');
         setIsLoading(false);
       } else {
         setFormError('Demo account unavailable. Please try again later.');
@@ -121,16 +111,7 @@ export default function LoginPage() {
       const result = await signIn(username, password);
 
       if (!result.error) {
-        const role = getRole(result.user ?? null);
-        const isAdmin = role === 'admin' || role === 'super_admin';
-        const route = isAdmin ? '/admin' : '/';
-        
-        if (isAdmin || result.user?.email === 'demo@gmail.com') {
-          router.replace(route);
-        } else {
-          setPendingRoute(route);
-          setShowPopups(true);
-        }
+        router.replace('/admin');
         setIsLoading(false);
       } else {
         setFormError('Invalid credentials. Please try again.');

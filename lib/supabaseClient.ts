@@ -3,12 +3,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 let _client: SupabaseClient | null = null;
 
 function createSupabaseClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://cpcvklekwwawgtgbyrmp.supabase.co';
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-  if (!url) throw new Error('Missing env var: NEXT_PUBLIC_SUPABASE_URL');
-  if (!key) throw new Error('Missing env var: NEXT_PUBLIC_SUPABASE_ANON_KEY');
+    ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    ?? 'sb_publishable_placeholder';
 
   if (!_client) {
     _client = createClient(url, key, { auth: { persistSession: true } });

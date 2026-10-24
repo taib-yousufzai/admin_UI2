@@ -1,21 +1,11 @@
-import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { getRole } from './auth';
 import { Permission, hasPermission } from './permissions';
+import { getAdminClient, getUserFromRequest } from './adminClient';
 
 export interface AuthContext {
-  adminClient: SupabaseClient;
-  callerUser: User;
+  adminClient: any;
+  callerUser: any;
   callerRole: string;
-}
-
-function createAdminClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url) throw new Error('Missing env: NEXT_PUBLIC_SUPABASE_URL');
-  if (!serviceKey) throw new Error('Missing env: SUPABASE_SERVICE_ROLE_KEY');
-  return createClient(url, serviceKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
 }
 
 /**
@@ -38,15 +28,7 @@ export async function requireAuth(
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let adminClient: SupabaseClient;
-  try {
-    adminClient = createAdminClient();
-  } catch (e) {
-    console.error('[requireAuth] createAdminClient failed:', e);
-    return Response.json({ error: 'Server configuration error' }, { status: 500 });
-  }
-
-  const { getUserFromRequest } = await import('./adminClient');
+  const adminClient = getAdminClient();
   const user = await getUserFromRequest(request);
   if (!user) {
     console.error('[requireAuth] getUser failed or token expired');

@@ -54,37 +54,50 @@ export function getRole(user: User | null): AppRole {
  * Validates: Requirements 2.1, 2.3, 5.3
  */
 export async function signIn(email: string, password: string): Promise<SignInResult> {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-  if (error || !data.session || !data.user) {
-    return { error: 'Invalid credentials. Please try again.' };
+  try {
+    const res = await fetch('/api/admin/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (res.ok && data.session && data.user) {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', data.session.access_token);
+        localStorage.setItem('auth_user', JSON.stringify(data.user));
+      }
+      return { session: data.session, user: data.user };
+    }
+  } catch (e) {
+    // Fall back to Supabase auth
   }
 
-  return { session: data.session, user: data.user };
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error || !data.session || !data.user) {
+      return { error: 'Invalid credentials. Please try again.' };
+    }
+    return { session: data.session, user: data.user };
+  } catch {
+    return { error: 'Invalid credentials. Please try again.' };
+  }
 }
 
 /**
- * Signs out the current user via Supabase Auth and redirects to /login.
- * The redirect happens regardless of whether the sign-out call succeeds or fails.
- * Any error is logged to the console but not surfaced to the caller.
- *
- * Validates: Requirements 4.1, 4.2, 4.3
+ * Signs out the current user and redirects to /login.
  */
 export async function signOut(): Promise<void> {
-  try {
-    // Keep the watchlist intact even after logging out
-    // if (_cachedSession && (_cachedSession.user?.email === 'demo@gmail.com' || _cachedSession.user?.user_metadata?.demo_user)) {
-    //   localStorage.setItem('marginApex_watchlist', '[]');
-    // }
-  } catch (e) {
-    console.error('Failed to clear demo watchlist on signout:', e);
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user');
+    } catch {}
   }
   _cachedSession = null;
   _cacheTimestamp = 0;
-  const { error } = await supabase.auth.signOut();
-  if (error) {
-    console.error('signOut error:', error);
-  }
+  try {
+    await supabase.auth.signOut();
+  } catch {}
   window.location.href = '/login';
 }
 
@@ -171,6 +184,30 @@ if (typeof window !== 'undefined') {
 let _sessionPromise: Promise<Session | null> | null = null;
 
 export async function getSession(): Promise<Session | null> {
+  if (typeof window !== 'undefined') {
+    try {
+      const token = localStorage.getItem('auth_token');
+      const userStr = localStorage.getItem('auth_user');
+      if (token) {
+        let user: any = null;
+        if (userStr) {
+          try { user = JSON.parse(userStr); } catch {}
+        }
+        if (!user) {
+          try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            user = { id: payload.sub, email: payload.email, user_metadata: payload.user_metadata || { role: payload.role } };
+          } catch {}
+        }
+        return {
+          access_token: token,
+          token_type: 'bearer',
+          user,
+        } as unknown as Session;
+      }
+    } catch {}
+  }
+
   if (_sessionPromise) {
     return _sessionPromise;
   }
